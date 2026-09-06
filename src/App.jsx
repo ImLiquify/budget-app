@@ -107,25 +107,36 @@ const storageHelper = {
   }
 };
 
-const todayISO = () => new Date().toISOString().slice(0, 10);
-const daysBetween = (a, b) => Math.ceil((new Date(b) - new Date(a)) / 86400000);
+function toLocalISODate(d) {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+function parseLocalDate(iso) {
+  if (iso instanceof Date) return iso;
+  const [y, m, d] = String(iso).slice(0, 10).split("-").map(Number);
+  return new Date(y, (m || 1) - 1, d || 1);
+}
+const todayISO = () => toLocalISODate(new Date());
+const daysBetween = (a, b) => Math.ceil((parseLocalDate(b) - parseLocalDate(a)) / 86400000);
 const symbolFor = (code) => (CURRENCIES.find((c) => c.code === code) || {}).symbol || "$";
 const fmt = (amount, symbol) =>
   `${symbol}${Number(amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 function nextWeekday(fromIso, targetDay) {
-  const d = new Date(fromIso);
+  const d = parseLocalDate(fromIso);
   const day = d.getDay();
   let diff = (targetDay - day + 7) % 7;
   if (diff === 0) diff = 7;
   d.setDate(d.getDate() + diff);
-  return d.toISOString().slice(0, 10);
+  return toLocalISODate(d);
 }
 
 function addDays(iso, days) {
-  const d = new Date(iso);
+  const d = parseLocalDate(iso);
   d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
+  return toLocalISODate(d);
 }
 
 function expenseMonthly(amount, freq) {
@@ -951,7 +962,7 @@ function Dashboard({ state, symbol, dueSoon, onOpenLog, onCheckIn, setView }) {
 
   const last7 = [...Array(7)].map((_, i) => {
     const d = new Date(); d.setDate(d.getDate() - (6 - i));
-    const iso = d.toISOString().slice(0, 10);
+    const iso = toLocalISODate(d);
     const total = logs.filter((l) => l.type === "expense" && l.date === iso).reduce((s, l) => s + l.amount, 0);
     return { day: d.toLocaleDateString(undefined, { weekday: "short" }), total: Number(total.toFixed(2)) };
   });
