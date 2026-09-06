@@ -1426,7 +1426,7 @@ function WishlistModal({ items, symbol, balance, onClose, onDelete, onComplete, 
     </Modal>
   );
 }
-function Strategy({ state, symbol, checkInDue, daysToCheckIn, onCheckIn, onSkipCheckIn, onChangeCheckInDay, onAddItem, onDeleteItem, onEditDate, onMarkPurchased, onSaveSplit }) {
+function Strategy({ state, symbol, checkInDue, daysToCheckIn, onCheckIn, onSkipCheckIn, onChangeCheckInDay, onAddItem, onDeleteItem, onEditDate, onMarkPurchased, onUndoPurchase, onDeletePurchase, onSaveSplit }) {
   const { profile, items, expenses, logs, budgetSplit } = state;
   const balance = computeBalance(profile, logs);
   const allowance = Number(profile.allowance) || 0;
@@ -1529,7 +1529,22 @@ function Strategy({ state, symbol, checkInDue, daysToCheckIn, onCheckIn, onSkipC
           </summary>
           <div className="space-y-2 mt-2">
             {purchasedTargets.map((it) => (
-              <RowItem key={it.id} tone={C.moss} title={it.name} subtitle={`Purchased ${it.purchasedDate || ""} · ${fmt(it.cost, symbol)}`} />
+              <RowItem
+                key={it.id}
+                tone={C.moss}
+                title={it.name}
+                subtitle={`Purchased ${it.purchasedDate || ""} · ${fmt(it.cost, symbol)}`}
+                onDelete={() => onDeletePurchase(it)}
+                right={
+                  <button
+                    onClick={() => onUndoPurchase(it)}
+                    className="text-[11px] font-semibold px-2 py-1 rounded-full whitespace-nowrap"
+                    style={{ background: C.brassBg, color: C.brass, fontFamily: "'Public Sans', sans-serif" }}
+                  >
+                    Undo
+                  </button>
+                }
+              />
             ))}
           </div>
         </details>
@@ -1778,11 +1793,24 @@ export default function App() {
     setItems(next); persist({ items: next });
   }
   function markPurchased(item) {
-    const nextItems = items.map((i) => (i.id === item.id ? { ...i, purchased: true, purchasedDate: todayISO() } : i));
+    const logId = uid();
+    const nextItems = items.map((i) => (i.id === item.id ? { ...i, purchased: true, purchasedDate: todayISO(), purchaseLogId: logId } : i));
     const nextLogs = [...logs, {
-      id: uid(), type: "expense", category: item.type === "need" ? "needs" : "wants",
+      id: logId, type: "expense", category: item.type === "need" ? "needs" : "wants",
       amount: item.cost, note: item.name, date: todayISO(),
     }];
+    setItems(nextItems); setLogs(nextLogs);
+    persist({ items: nextItems, logs: nextLogs });
+  }
+  function undoPurchase(item) {
+    const nextItems = items.map((i) => (i.id === item.id ? { ...i, purchased: false, purchasedDate: null, purchaseLogId: null } : i));
+    const nextLogs = item.purchaseLogId ? logs.filter((l) => l.id !== item.purchaseLogId) : logs;
+    setItems(nextItems); setLogs(nextLogs);
+    persist({ items: nextItems, logs: nextLogs });
+  }
+  function deletePurchase(item) {
+    const nextItems = items.filter((i) => i.id !== item.id);
+    const nextLogs = item.purchaseLogId ? logs.filter((l) => l.id !== item.purchaseLogId) : logs;
     setItems(nextItems); setLogs(nextLogs);
     persist({ items: nextItems, logs: nextLogs });
   }
@@ -1896,6 +1924,8 @@ export default function App() {
           onDeleteItem={deleteItem}
           onEditDate={updateItemDate}
           onMarkPurchased={markPurchased}
+          onUndoPurchase={undoPurchase}
+          onDeletePurchase={deletePurchase}
           onSaveSplit={saveSplit}
         />
       )}
