@@ -724,7 +724,7 @@ function Onboarding({ onComplete }) {
   const [allowance, setAllowance] = useState("");
   const [items, setItems] = useState([]);
   const [expenses, setExpenses] = useState([
-    { id: uid(), type: "fixed", category: "needs", name: "TNG Card / Transit", amount: 50, freq: "month" }
+    // { id: uid(), type: "fixed", category: "needs", name: "TNG Card / Transit", amount: 50, freq: "month" }
   ]);
   const [split, setSplit] = useState({ needs: 50, wants: 30, savings: 20 });
   const [splitTouched, setSplitTouched] = useState(false);
