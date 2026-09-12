@@ -12,6 +12,7 @@ import {
 import {
   toLocalISODate, parseLocalDate, todayISO, daysBetween, addDays, FREQ_DAYS,
   computeNextAllowanceReminderDate, computeSnoozeDate,
+  getActiveSlideIds, allowanceSlideMode,
 } from "./lib/budgetMath.js";
 
 const C = {
@@ -358,6 +359,95 @@ function Legend({ color, label, spent, total, symbol, overspent }) {
       <div className="text-sm font-bold tabular-nums pl-4 ml-0.5" style={{ color, fontFamily: "'IBM Plex Mono', monospace" }}>
         {fmt(spent, symbol)} <span style={{ color: C.slate, fontWeight: 500 }}>/</span> {fmt(total, symbol)}
       </div>
+    </div>
+  );
+}
+
+const STATIC_QUOTES = [
+  "You're doing great, {name}.",
+  "Every ringgit counts, {name} — keep it up.",
+  "Small steady steps win the month, {name}.",
+  "Stay the course, {name}. Your future self says thanks.",
+  "{name}, discipline today is freedom tomorrow.",
+  "Nice and steady, {name} — that's how budgets get built.",
+];
+
+function buildDynamicQuotes({ name, safeToSpend, symbol, savingsPool, wantsPool }) {
+  return [
+    `${name}, you've got ${fmt(safeToSpend, symbol)} left today — nice pace.`,
+    `Your Savings Pool just hit ${fmt(savingsPool, symbol)}, ${name}.`,
+    `${name}, your Wants Pool is at ${fmt(wantsPool, symbol)} — getting closer to that wishlist item.`,
+  ];
+}
+
+function DashboardCarouselBanner({ profile, checkInDue, symbol, safeToSpend, onCheckIn, onOpenAllowanceReminder }) {
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 8000);
+    return () => clearInterval(id);
+  }, []);
+
+  const todayIso = todayISO();
+  const activeSlideIds = useMemo(
+    () => getActiveSlideIds({
+      checkInDue,
+      nextAllowanceReminderDate: profile.nextAllowanceReminderDate,
+      allowanceReminderSnoozed: !!profile.allowanceReminderSnoozed,
+      todayIso,
+    }),
+    [checkInDue, profile.nextAllowanceReminderDate, profile.allowanceReminderSnoozed, todayIso]
+  );
+  const slideId = activeSlideIds[tick % activeSlideIds.length];
+
+  const quotePool = useMemo(() => [
+    ...STATIC_QUOTES,
+    ...buildDynamicQuotes({
+      name: profile.name, safeToSpend, symbol,
+      savingsPool: profile.savingsPool || 0, wantsPool: profile.wantsPool || 0,
+    }),
+  ], [profile.name, safeToSpend, symbol, profile.savingsPool, profile.wantsPool]);
+
+  const quoteText = useMemo(
+    () => quotePool[Math.floor(Math.random() * quotePool.length)].replace("{name}", profile.name),
+    [tick, quotePool]
+  );
+
+  let content;
+  if (slideId === "checkin") {
+    content = (
+      <>
+        <span>Your weekly Strategy check-in is ready, {profile.name}.</span>
+        <button onClick={onCheckIn} className="text-sm font-bold whitespace-nowrap shrink-0" style={{ color: C.brass }}>
+          Check in now →
+        </button>
+      </>
+    );
+  } else if (slideId === "allowance") {
+    const mode = allowanceSlideMode({ nextAllowanceReminderDate: profile.nextAllowanceReminderDate, todayIso });
+    const days = daysBetween(todayIso, profile.nextAllowanceReminderDate);
+    content = (
+      <>
+        <span>
+          {mode === "due"
+            ? `Time to re-input your allowance, ${profile.name}.`
+            : `Allowance re-input in ${days} day${days === 1 ? "" : "s"}.`}
+        </span>
+        <button onClick={onOpenAllowanceReminder} className="text-sm font-bold whitespace-nowrap shrink-0" style={{ color: C.brass }}>
+          Input now →
+        </button>
+      </>
+    );
+  } else {
+    content = <span>{quoteText}</span>;
+  }
+
+  return (
+    <div
+      className="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl mt-4 text-sm font-medium"
+      style={{ background: C.paperDark, color: C.ink, fontFamily: "'Public Sans', sans-serif" }}
+    >
+      {content}
     </div>
   );
 }
@@ -957,7 +1047,7 @@ function RowItem({ tone, title, subtitle, onDelete, right }) {
   );
 }
 
-function Dashboard({ state, symbol, dueSoon, onOpenLog, onCheckIn, setView }) {
+function Dashboard({ state, symbol, dueSoon, onOpenLog, onCheckIn, setView, onOpenAllowanceReminder }) {
   const { profile, items, expenses, logs, budgetSplit } = state;
   const periodStart = profile.lastAllowanceUpdate;
   const periodLogs = logs.filter((l) => l.date >= periodStart);
@@ -1063,6 +1153,10 @@ function Dashboard({ state, symbol, dueSoon, onOpenLog, onCheckIn, setView }) {
             symbol={symbol}
           />
           <div className="text-[11px] text-center -mt-1 mb-1" style={{ color: C.slate, fontFamily: "'Public Sans', sans-serif" }}>Today vs. daily caps</div>
+          <DashboardCarouselBanner
+            profile={profile} checkInDue={dueSoon} symbol={symbol} safeToSpend={safeToSpend}
+            onCheckIn={onCheckIn} onOpenAllowanceReminder={onOpenAllowanceReminder}
+          />
           <div className="grid grid-cols-3 gap-2 mt-4 pt-4" style={{ borderTop: `1px solid ${C.line}` }}>
             <Stat label="Spent" value={fmt(totalSpent, symbol)} tone={overspent ? C.danger : undefined} />
             <Stat label="Allowance" value={fmt(totalAllowance, symbol)} />
@@ -1989,6 +2083,7 @@ export default function App() {
           state={state} symbol={symbol} dueSoon={checkInDue}
           onOpenLog={() => setShowLogModal(true)}
           onCheckIn={() => setShowMacroCheckInModal(true)}
+          onOpenAllowanceReminder={() => setShowAllowanceReminderModal(true)}
           setView={setView}
         />
       )}
