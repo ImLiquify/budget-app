@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toLocalISODate, parseLocalDate, todayISO, daysBetween, addDays, FREQ_DAYS, computeNextAllowanceReminderDate, computeSnoozeDate, computeWeeklyUnderspend, bankUnderspend, applyWantPurchase, undoWantPurchase, isWantAffordable, isItemPurchasable } from "./budgetMath.js";
+import { toLocalISODate, parseLocalDate, todayISO, daysBetween, addDays, FREQ_DAYS, computeNextAllowanceReminderDate, computeSnoozeDate, computeWeeklyUnderspend, bankUnderspend, applyWantPurchase, undoWantPurchase, isWantAffordable, isItemPurchasable, getActiveSlideIds, allowanceSlideMode } from "./budgetMath.js";
 
 describe("toLocalISODate", () => {
   it("formats a Date as YYYY-MM-DD using local fields", () => {
@@ -150,5 +150,38 @@ describe("isItemPurchasable", () => {
   it("checks need-type items against total balance, unchanged", () => {
     expect(isItemPurchasable({ type: "need", cost: 400 }, 500, 0)).toBe(true);
     expect(isItemPurchasable({ type: "need", cost: 600 }, 500, 1000)).toBe(false);
+  });
+});
+
+describe("getActiveSlideIds", () => {
+  const base = { checkInDue: false, nextAllowanceReminderDate: "2026-09-20", allowanceReminderSnoozed: false, todayIso: "2026-09-12" };
+
+  it("only includes the quote slide when nothing is due or snoozed", () => {
+    expect(getActiveSlideIds(base)).toEqual(["quote"]);
+  });
+  it("includes the check-in slide when check-in is due", () => {
+    expect(getActiveSlideIds({ ...base, checkInDue: true })).toEqual(["quote", "checkin"]);
+  });
+  it("does not include the allowance slide before due, even without a snooze", () => {
+    expect(getActiveSlideIds(base)).not.toContain("allowance");
+  });
+  it("includes the allowance slide once snoozed, before the due date", () => {
+    expect(getActiveSlideIds({ ...base, allowanceReminderSnoozed: true })).toEqual(["quote", "allowance"]);
+  });
+  it("includes the allowance slide once actually due, regardless of the snooze flag", () => {
+    expect(getActiveSlideIds({ ...base, todayIso: "2026-09-25" })).toEqual(["quote", "allowance"]);
+  });
+  it("includes all three slides when everything is active", () => {
+    expect(getActiveSlideIds({ ...base, checkInDue: true, todayIso: "2026-09-25" })).toEqual(["quote", "checkin", "allowance"]);
+  });
+});
+
+describe("allowanceSlideMode", () => {
+  it("returns 'countdown' before the due date", () => {
+    expect(allowanceSlideMode({ nextAllowanceReminderDate: "2026-09-20", todayIso: "2026-09-12" })).toBe("countdown");
+  });
+  it("returns 'due' on or after the due date", () => {
+    expect(allowanceSlideMode({ nextAllowanceReminderDate: "2026-09-20", todayIso: "2026-09-20" })).toBe("due");
+    expect(allowanceSlideMode({ nextAllowanceReminderDate: "2026-09-20", todayIso: "2026-09-25" })).toBe("due");
   });
 });

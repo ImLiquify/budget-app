@@ -73,3 +73,15 @@ export function isWantAffordable(wantsPool, cost) {
 export function isItemPurchasable(item, balance, wantsPool) {
   return item.type === "want" ? isWantAffordable(wantsPool, item.cost) : balance >= item.cost;
 }
+
+export function allowanceSlideMode({ nextAllowanceReminderDate, todayIso }) {
+  return todayIso >= nextAllowanceReminderDate ? "due" : "countdown";
+}
+
+export function getActiveSlideIds({ checkInDue, nextAllowanceReminderDate, allowanceReminderSnoozed, todayIso }) {
+  const slides = ["quote"];
+  if (checkInDue) slides.push("checkin");
+  const mode = allowanceSlideMode({ nextAllowanceReminderDate, todayIso });
+  if (mode === "due" || allowanceReminderSnoozed) slides.push("allowance");
+  return slides;
+}
