@@ -71,7 +71,9 @@ export function isWantAffordable(wantsPool, cost) {
 }
 
 export function isItemPurchasable(item, balance, wantsPool) {
-  return item.type === "want" ? isWantAffordable(wantsPool, item.cost) : balance >= item.cost;
+  return item.type === "want"
+    ? isWantAffordable(wantsPool, item.cost) && balance >= item.cost
+    : balance >= item.cost;
 }
 
 export function allowanceSlideMode({ nextAllowanceReminderDate, todayIso }) {
@@ -84,4 +86,8 @@ export function getActiveSlideIds({ checkInDue, nextAllowanceReminderDate, allow
   const mode = allowanceSlideMode({ nextAllowanceReminderDate, todayIso });
   if (mode === "due" || allowanceReminderSnoozed) slides.push("allowance");
   return slides;
+}
+
+export function shouldBankUnderspend(lastBankDateIso, todayIso) {
+  return !lastBankDateIso || daysBetween(lastBankDateIso, todayIso) >= 7;
 }

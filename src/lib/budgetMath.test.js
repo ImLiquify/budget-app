@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toLocalISODate, parseLocalDate, todayISO, daysBetween, addDays, FREQ_DAYS, computeNextAllowanceReminderDate, computeSnoozeDate, computeWeeklyUnderspend, bankUnderspend, applyWantPurchase, undoWantPurchase, isWantAffordable, isItemPurchasable, getActiveSlideIds, allowanceSlideMode } from "./budgetMath.js";
+import { toLocalISODate, parseLocalDate, todayISO, daysBetween, addDays, FREQ_DAYS, computeNextAllowanceReminderDate, computeSnoozeDate, computeWeeklyUnderspend, bankUnderspend, applyWantPurchase, undoWantPurchase, isWantAffordable, isItemPurchasable, getActiveSlideIds, allowanceSlideMode, shouldBankUnderspend } from "./budgetMath.js";
 
 describe("toLocalISODate", () => {
   it("formats a Date as YYYY-MM-DD using local fields", () => {
@@ -151,6 +151,9 @@ describe("isItemPurchasable", () => {
     expect(isItemPurchasable({ type: "need", cost: 400 }, 500, 0)).toBe(true);
     expect(isItemPurchasable({ type: "need", cost: 600 }, 500, 1000)).toBe(false);
   });
+  it("also requires total balance to cover a want item, even if the pool alone would", () => {
+    expect(isItemPurchasable({ type: "want", cost: 400 }, 300, 500)).toBe(false);
+  });
 });
 
 describe("getActiveSlideIds", () => {
@@ -183,5 +186,17 @@ describe("allowanceSlideMode", () => {
   it("returns 'due' on or after the due date", () => {
     expect(allowanceSlideMode({ nextAllowanceReminderDate: "2026-09-20", todayIso: "2026-09-20" })).toBe("due");
     expect(allowanceSlideMode({ nextAllowanceReminderDate: "2026-09-20", todayIso: "2026-09-25" })).toBe("due");
+  });
+});
+
+describe("shouldBankUnderspend", () => {
+  it("allows banking when never banked before", () => {
+    expect(shouldBankUnderspend(null, "2026-09-12")).toBe(true);
+  });
+  it("blocks banking within 7 days of the last bank", () => {
+    expect(shouldBankUnderspend("2026-09-10", "2026-09-12")).toBe(false);
+  });
+  it("allows banking again once 7 or more days have passed", () => {
+    expect(shouldBankUnderspend("2026-09-05", "2026-09-12")).toBe(true);
   });
 });

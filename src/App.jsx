@@ -12,7 +12,7 @@ import {
 import {
   toLocalISODate, parseLocalDate, todayISO, daysBetween, addDays, FREQ_DAYS,
   computeNextAllowanceReminderDate, computeSnoozeDate,
-  getActiveSlideIds, allowanceSlideMode,
+  getActiveSlideIds, allowanceSlideMode, shouldBankUnderspend,
   isItemPurchasable, applyWantPurchase, undoWantPurchase,
   computeWeeklyUnderspend, bankUnderspend,
 } from "./lib/budgetMath.js";
@@ -1970,7 +1970,8 @@ export default function App() {
   }
   function markPurchased(item) {
     const logId = uid();
-    const nextItems = items.map((i) => (i.id === item.id ? { ...i, purchased: true, purchasedDate: todayISO(), purchaseLogId: logId } : i));
+    const wantsPoolDebit = item.type === "want" ? Math.min(item.cost, profile.wantsPool || 0) : 0;
+    const nextItems = items.map((i) => (i.id === item.id ? { ...i, purchased: true, purchasedDate: todayISO(), purchaseLogId: logId, wantsPoolDebit } : i));
     const nextLogs = [...logs, {
       id: logId, type: "expense", category: item.type === "need" ? "needs" : "wants",
       amount: item.cost, note: item.name, date: todayISO(),
@@ -1985,12 +1986,12 @@ export default function App() {
     persist(patch);
   }
   function undoPurchase(item) {
-    const nextItems = items.map((i) => (i.id === item.id ? { ...i, purchased: false, purchasedDate: null, purchaseLogId: null } : i));
+    const nextItems = items.map((i) => (i.id === item.id ? { ...i, purchased: false, purchasedDate: null, purchaseLogId: null, wantsPoolDebit: undefined } : i));
     const nextLogs = item.purchaseLogId ? logs.filter((l) => l.id !== item.purchaseLogId) : logs;
     setItems(nextItems); setLogs(nextLogs);
     const patch = { items: nextItems, logs: nextLogs };
     if (item.type === "want") {
-      const nextProfile = { ...profile, wantsPool: undoWantPurchase(profile.wantsPool, item.cost) };
+      const nextProfile = { ...profile, wantsPool: undoWantPurchase(profile.wantsPool, item.wantsPoolDebit || 0) };
       setProfile(nextProfile);
       patch.profile = nextProfile;
     }
@@ -2014,11 +2015,15 @@ export default function App() {
     const dailyWantsCap = dailyCap * wantsPct;
     setBudgetSplit(split);
     setProfile((prev) => {
-      const pools = bankUnderspend(
-        { savingsPool: prev.savingsPool, wantsPool: prev.wantsPool },
-        weeklyNeedsUnderspend,
-        weeklyWantsUnderspend
-      );
+      const today = todayISO();
+      const canBank = shouldBankUnderspend(prev.lastUnderspendBankDate, today);
+      const pools = canBank
+        ? bankUnderspend(
+            { savingsPool: prev.savingsPool, wantsPool: prev.wantsPool },
+            weeklyNeedsUnderspend,
+            weeklyWantsUnderspend
+          )
+        : { savingsPool: prev.savingsPool || 0, wantsPool: prev.wantsPool || 0 };
       const next = {
         ...prev,
         nextCheckInDate: addDays(prev.nextCheckInDate || todayISO(), 7),
@@ -2027,6 +2032,7 @@ export default function App() {
         dailyWantsCap,
         savingsPool: pools.savingsPool,
         wantsPool: pools.wantsPool,
+        lastUnderspendBankDate: canBank ? today : prev.lastUnderspendBankDate,
       };
       persist({ budgetSplit: split, profile: next });
       return next;
