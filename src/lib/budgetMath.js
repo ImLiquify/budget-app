@@ -50,3 +50,26 @@ export function computeWeeklyUnderspend({ logs, dailyFlexNeeds, dailyWants, toda
   }
   return { weeklyNeedsUnderspend, weeklyWantsUnderspend };
 }
+
+export function bankUnderspend(pools, weeklyNeedsUnderspend, weeklyWantsUnderspend) {
+  return {
+    savingsPool: Math.max(0, (pools.savingsPool || 0) + weeklyNeedsUnderspend),
+    wantsPool: Math.max(0, (pools.wantsPool || 0) + weeklyWantsUnderspend),
+  };
+}
+
+export function applyWantPurchase(wantsPool, cost) {
+  return Math.max(0, (wantsPool || 0) - cost);
+}
+
+export function undoWantPurchase(wantsPool, cost) {
+  return (wantsPool || 0) + cost;
+}
+
+export function isWantAffordable(wantsPool, cost) {
+  return (wantsPool || 0) >= cost;
+}
+
+export function isItemPurchasable(item, balance, wantsPool) {
+  return item.type === "want" ? isWantAffordable(wantsPool, item.cost) : balance >= item.cost;
+}

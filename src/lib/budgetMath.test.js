@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toLocalISODate, parseLocalDate, todayISO, daysBetween, addDays, FREQ_DAYS, computeNextAllowanceReminderDate, computeSnoozeDate, computeWeeklyUnderspend } from "./budgetMath.js";
+import { toLocalISODate, parseLocalDate, todayISO, daysBetween, addDays, FREQ_DAYS, computeNextAllowanceReminderDate, computeSnoozeDate, computeWeeklyUnderspend, bankUnderspend, applyWantPurchase, undoWantPurchase, isWantAffordable, isItemPurchasable } from "./budgetMath.js";
 
 describe("toLocalISODate", () => {
   it("formats a Date as YYYY-MM-DD using local fields", () => {
@@ -104,5 +104,51 @@ describe("computeWeeklyUnderspend", () => {
     ];
     const result = computeWeeklyUnderspend({ logs, dailyFlexNeeds: 20, dailyWants: 10, todayIso });
     expect(result).toEqual({ weeklyNeedsUnderspend: 140, weeklyWantsUnderspend: 70 });
+  });
+});
+
+describe("bankUnderspend", () => {
+  it("adds needs underspend to savingsPool and wants underspend to wantsPool", () => {
+    expect(bankUnderspend({ savingsPool: 10, wantsPool: 5 }, 20, 8)).toEqual({ savingsPool: 30, wantsPool: 13 });
+  });
+  it("treats missing pool values as zero", () => {
+    expect(bankUnderspend({}, 15, 4)).toEqual({ savingsPool: 15, wantsPool: 4 });
+  });
+});
+
+describe("applyWantPurchase", () => {
+  it("subtracts the cost from the wants pool", () => {
+    expect(applyWantPurchase(100, 40)).toBe(60);
+  });
+  it("floors at zero instead of going negative", () => {
+    expect(applyWantPurchase(30, 40)).toBe(0);
+  });
+});
+
+describe("undoWantPurchase", () => {
+  it("adds the cost back to the wants pool", () => {
+    expect(undoWantPurchase(60, 40)).toBe(100);
+  });
+});
+
+describe("isWantAffordable", () => {
+  it("is true when the pool covers the cost", () => {
+    expect(isWantAffordable(500, 400)).toBe(true);
+  });
+  it("is false when the pool is short", () => {
+    expect(isWantAffordable(100, 400)).toBe(false);
+  });
+});
+
+describe("isItemPurchasable", () => {
+  it("checks want-type items against the wants pool, not total balance", () => {
+    expect(isItemPurchasable({ type: "want", cost: 400 }, 500, 100)).toBe(false);
+  });
+  it("says a want item is affordable once the wants pool covers it", () => {
+    expect(isItemPurchasable({ type: "want", cost: 400 }, 500, 400)).toBe(true);
+  });
+  it("checks need-type items against total balance, unchanged", () => {
+    expect(isItemPurchasable({ type: "need", cost: 400 }, 500, 0)).toBe(true);
+    expect(isItemPurchasable({ type: "need", cost: 600 }, 500, 1000)).toBe(false);
   });
 });
