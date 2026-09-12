@@ -36,3 +36,17 @@ export function computeSnoozeDate({ fromIso, days, explicitDate }) {
   if (explicitDate) return explicitDate;
   return addDays(fromIso, days);
 }
+
+export function computeWeeklyUnderspend({ logs, dailyFlexNeeds, dailyWants, todayIso }) {
+  let weeklyNeedsUnderspend = 0;
+  let weeklyWantsUnderspend = 0;
+  for (let i = 0; i < 7; i++) {
+    const dayIso = addDays(todayIso, -i);
+    const dayExpenses = logs.filter((l) => l.date === dayIso && l.type === "expense");
+    const needsSpent = dayExpenses.filter((l) => l.category === "needs").reduce((s, l) => s + l.amount, 0);
+    const wantsSpent = dayExpenses.filter((l) => l.category === "wants").reduce((s, l) => s + l.amount, 0);
+    weeklyNeedsUnderspend += Math.max(0, dailyFlexNeeds - needsSpent);
+    weeklyWantsUnderspend += Math.max(0, dailyWants - wantsSpent);
+  }
+  return { weeklyNeedsUnderspend, weeklyWantsUnderspend };
+}

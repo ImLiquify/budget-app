@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toLocalISODate, parseLocalDate, todayISO, daysBetween, addDays, FREQ_DAYS, computeNextAllowanceReminderDate, computeSnoozeDate } from "./budgetMath.js";
+import { toLocalISODate, parseLocalDate, todayISO, daysBetween, addDays, FREQ_DAYS, computeNextAllowanceReminderDate, computeSnoozeDate, computeWeeklyUnderspend } from "./budgetMath.js";
 
 describe("toLocalISODate", () => {
   it("formats a Date as YYYY-MM-DD using local fields", () => {
@@ -67,5 +67,42 @@ describe("computeSnoozeDate", () => {
   });
   it("uses the explicit date when provided, ignoring days", () => {
     expect(computeSnoozeDate({ fromIso: "2026-09-12", days: 7, explicitDate: "2026-10-01" })).toBe("2026-10-01");
+  });
+});
+
+describe("computeWeeklyUnderspend", () => {
+  it("sums zero underspend when every day is spent exactly to cap", () => {
+    const todayIso = "2026-09-12";
+    const logs = [];
+    for (let i = 0; i < 7; i++) {
+      const date = addDays(todayIso, -i);
+      logs.push({ date, type: "expense", category: "needs", amount: 20 });
+      logs.push({ date, type: "expense", category: "wants", amount: 10 });
+    }
+    const result = computeWeeklyUnderspend({ logs, dailyFlexNeeds: 20, dailyWants: 10, todayIso });
+    expect(result).toEqual({ weeklyNeedsUnderspend: 0, weeklyWantsUnderspend: 0 });
+  });
+
+  it("banks the full cap on days with zero spend", () => {
+    const todayIso = "2026-09-12";
+    const result = computeWeeklyUnderspend({ logs: [], dailyFlexNeeds: 20, dailyWants: 10, todayIso });
+    expect(result).toEqual({ weeklyNeedsUnderspend: 140, weeklyWantsUnderspend: 70 });
+  });
+
+  it("does not go negative on days that overspent the cap", () => {
+    const todayIso = "2026-09-12";
+    const logs = [{ date: todayIso, type: "expense", category: "needs", amount: 50 }];
+    const result = computeWeeklyUnderspend({ logs, dailyFlexNeeds: 20, dailyWants: 10, todayIso });
+    expect(result).toEqual({ weeklyNeedsUnderspend: 120, weeklyWantsUnderspend: 70 });
+  });
+
+  it("ignores income logs and logs outside the 7-day window", () => {
+    const todayIso = "2026-09-12";
+    const logs = [
+      { date: todayIso, type: "income", category: "needs", amount: 1000 },
+      { date: addDays(todayIso, -10), type: "expense", category: "needs", amount: 20 },
+    ];
+    const result = computeWeeklyUnderspend({ logs, dailyFlexNeeds: 20, dailyWants: 10, todayIso });
+    expect(result).toEqual({ weeklyNeedsUnderspend: 140, weeklyWantsUnderspend: 70 });
   });
 });
