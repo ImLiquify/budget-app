@@ -14,6 +14,7 @@ import {
   computeNextAllowanceReminderDate, computeSnoozeDate,
   getActiveSlideIds, allowanceSlideMode,
   isItemPurchasable, applyWantPurchase, undoWantPurchase,
+  computeWeeklyUnderspend, bankUnderspend,
 } from "./lib/budgetMath.js";
 
 const C = {
@@ -705,6 +706,18 @@ function MacroCheckInModal({ profile, logs, budgetSplit, expenses, symbol, onClo
     return suggestSplit(committedNeedsMonthly, allowanceMonthly(totalAllowance, profile.frequency));
   }, [committedNeedsMonthly, totalAllowance, profile.frequency]);
 
+  const committedNeedsPeriod = (committedNeedsMonthly / 30) * daysInPeriod;
+  const grossNeedsBudget = (totalAllowance * budgetSplit.needs) / 100;
+  const wantsBudgetTotal = (totalAllowance * budgetSplit.wants) / 100;
+  const flexNeedsBudget = Math.max(0, grossNeedsBudget - committedNeedsPeriod);
+  const dailyFlexNeeds = profile.dailyNeedsCap != null ? profile.dailyNeedsCap : flexNeedsBudget / daysInPeriod;
+  const dailyWants = profile.dailyWantsCap != null ? profile.dailyWantsCap : wantsBudgetTotal / daysInPeriod;
+
+  const { weeklyNeedsUnderspend, weeklyWantsUnderspend } = useMemo(
+    () => computeWeeklyUnderspend({ logs, dailyFlexNeeds, dailyWants, todayIso: todayISO() }),
+    [logs, dailyFlexNeeds, dailyWants]
+  );
+
   return (
     <Modal title="Weekly Strategy Check-In" onClose={onClose}>
       <div className="space-y-4">
@@ -732,6 +745,17 @@ function MacroCheckInModal({ profile, logs, budgetSplit, expenses, symbol, onClo
           </div>
         </Card>
 
+        <Card>
+          <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: C.slate }}>Banked This Week</div>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div><span style={{ color: C.slate }}>Needs (Flex):</span> <strong style={{ color: C.brass }}>{fmt(weeklyNeedsUnderspend, symbol)}</strong></div>
+            <div><span style={{ color: C.slate }}>Wants:</span> <strong style={{ color: C.clay }}>{fmt(weeklyWantsUnderspend, symbol)}</strong></div>
+          </div>
+          <p className="text-[11px] mt-2" style={{ color: C.slate }}>
+            Unspent daily budget doesn't roll into tomorrow's cap — it banks here toward your Savings and Wants pools when you apply below.
+          </p>
+        </Card>
+
         <Card style={{ background: C.brassBg, borderColor: `${C.brass}55` }}>
           <div className="flex items-center gap-1.5 mb-1.5 text-xs font-bold uppercase tracking-wide" style={{ color: C.brass }}>
             <Sparkles size={14} /> MacroFactor Recommendation
@@ -756,7 +780,12 @@ function MacroCheckInModal({ profile, logs, budgetSplit, expenses, symbol, onClo
           <Btn
             variant="accent"
             className="w-full text-xs"
-            onClick={() => onApplyRecommendation({ split: smartSplitRecommendation, dailyCap: Number(recommendedDailyCap) })}
+            onClick={() => onApplyRecommendation({
+              split: smartSplitRecommendation,
+              dailyCap: Number(recommendedDailyCap),
+              weeklyNeedsUnderspend,
+              weeklyWantsUnderspend,
+            })}
           >
             Apply Smart Rebalance & Finish Check-In
           </Btn>
@@ -1977,7 +2006,7 @@ export default function App() {
   function deleteExpense(id) { const next = expenses.filter((e) => e.id !== id); setExpenses(next); persist({ expenses: next }); }
   function updateProfile(patch) { const next = { ...profile, ...patch }; setProfile(next); persist({ profile: next }); }
   function saveSplit(split) { setBudgetSplit(split); persist({ budgetSplit: split }); }
-  function applyRecommendedSplit({ split, dailyCap }) {
+  function applyRecommendedSplit({ split, dailyCap, weeklyNeedsUnderspend, weeklyWantsUnderspend }) {
     const needsWantsTotal = split.needs + split.wants;
     const needsPct = needsWantsTotal > 0 ? split.needs / needsWantsTotal : 0.5;
     const wantsPct = needsWantsTotal > 0 ? split.wants / needsWantsTotal : 0.5;
@@ -1985,12 +2014,19 @@ export default function App() {
     const dailyWantsCap = dailyCap * wantsPct;
     setBudgetSplit(split);
     setProfile((prev) => {
+      const pools = bankUnderspend(
+        { savingsPool: prev.savingsPool, wantsPool: prev.wantsPool },
+        weeklyNeedsUnderspend,
+        weeklyWantsUnderspend
+      );
       const next = {
         ...prev,
         nextCheckInDate: addDays(prev.nextCheckInDate || todayISO(), 7),
         dailyCapOverride: dailyCap,
         dailyNeedsCap,
         dailyWantsCap,
+        savingsPool: pools.savingsPool,
+        wantsPool: pools.wantsPool,
       };
       persist({ budgetSplit: split, profile: next });
       return next;
