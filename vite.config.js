@@ -4,6 +4,9 @@ import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
     base: '/budget-app/',
+    test: {
+        environment: 'node',
+    },
     plugins: [
         react(),
         VitePWA({

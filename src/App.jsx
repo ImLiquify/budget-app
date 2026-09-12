@@ -9,6 +9,9 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell,
 } from "recharts";
+import {
+  toLocalISODate, parseLocalDate, todayISO, daysBetween, addDays, FREQ_DAYS,
+} from "./lib/budgetMath.js";
 
 const C = {
   paper: "#EFEBE2",
@@ -54,12 +57,6 @@ const CURRENCIES = [
   { code: "AUD", symbol: "A$" }, { code: "INR", symbol: "₹" },
 ];
 const FREQUENCIES = ["Daily", "Weekly", "Monthly", "Yearly"];
-const FREQ_DAYS = {
-  Daily: 1, Monthly: 30, Yearly: 365,
-  daily: 1, monthly: 30, yearly: 365,
-  day: 1, week: 7, month: 30, year: 365,
-  Weekly: 7, weekly: 7
-};
 const EXP_FREQS = ["day", "week", "month", "year"];
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const STORAGE_KEY = "ledger_budget_app_data_v2";
@@ -107,19 +104,6 @@ const storageHelper = {
   }
 };
 
-function toLocalISODate(d) {
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-function parseLocalDate(iso) {
-  if (iso instanceof Date) return iso;
-  const [y, m, d] = String(iso).slice(0, 10).split("-").map(Number);
-  return new Date(y, (m || 1) - 1, d || 1);
-}
-const todayISO = () => toLocalISODate(new Date());
-const daysBetween = (a, b) => Math.ceil((parseLocalDate(b) - parseLocalDate(a)) / 86400000);
 const symbolFor = (code) => (CURRENCIES.find((c) => c.code === code) || {}).symbol || "$";
 const fmt = (amount, symbol) =>
   `${symbol}${Number(amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -130,12 +114,6 @@ function nextWeekday(fromIso, targetDay) {
   let diff = (targetDay - day + 7) % 7;
   if (diff === 0) diff = 7;
   d.setDate(d.getDate() + diff);
-  return toLocalISODate(d);
-}
-
-function addDays(iso, days) {
-  const d = parseLocalDate(iso);
-  d.setDate(d.getDate() + days);
   return toLocalISODate(d);
 }
 
