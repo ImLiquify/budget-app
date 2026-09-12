@@ -11,7 +11,7 @@ import {
 } from "recharts";
 import {
   toLocalISODate, parseLocalDate, todayISO, daysBetween, addDays, FREQ_DAYS,
-  computeNextAllowanceReminderDate,
+  computeNextAllowanceReminderDate, computeSnoozeDate,
 } from "./lib/budgetMath.js";
 
 const C = {
@@ -517,6 +517,67 @@ function AllowanceModal({ profile, onClose, onSave }) {
         <TextInput type="number" autoFocus value={amount} onChange={(e) => setAmount(e.target.value)} />
       </Field>
       <Btn variant="accent" className="w-full mt-1" onClick={submit}><Check size={16} /> Save Changes</Btn>
+    </Modal>
+  );
+}
+
+const SNOOZE_PRESETS = [1, 3, 7, 14, 30];
+
+function AllowanceReminderModal({ profile, symbol, onClose, onSetAmount, onLeaveSame, onSnooze }) {
+  const [mode, setMode] = useState("choose");
+  const [amount, setAmount] = useState(profile.allowance);
+  const [snoozeDays, setSnoozeDays] = useState(7);
+  const [useCustomDate, setUseCustomDate] = useState(false);
+  const [customDate, setCustomDate] = useState("");
+
+  if (mode === "setAmount") {
+    return (
+      <Modal title="Set new allowance" onClose={onClose}>
+        <Field label={`Allowance (${symbol})`}>
+          <TextInput type="number" autoFocus value={amount} onChange={(e) => setAmount(e.target.value)} />
+        </Field>
+        <Btn variant="accent" className="w-full mt-1" onClick={() => onSetAmount(Number(amount) || 0)}>
+          <Check size={16} /> Confirm amount
+        </Btn>
+      </Modal>
+    );
+  }
+
+  if (mode === "snooze") {
+    return (
+      <Modal title="Remind me again" onClose={onClose}>
+        <label className="flex items-center gap-2 mb-4 text-sm" style={{ color: C.inkSoft, fontFamily: "'Public Sans', sans-serif" }}>
+          <input type="checkbox" checked={useCustomDate} onChange={(e) => setUseCustomDate(e.target.checked)} />
+          Pick a specific date instead
+        </label>
+        {useCustomDate ? (
+          <Field label="Remind me on">
+            <TextInput type="date" value={customDate} onChange={(e) => setCustomDate(e.target.value)} min={todayISO()} />
+          </Field>
+        ) : (
+          <Field label="Remind me in">
+            <Select value={snoozeDays} onChange={(e) => setSnoozeDays(Number(e.target.value))}
+              options={SNOOZE_PRESETS.map((d) => ({ value: d, label: `${d} day${d === 1 ? "" : "s"}` }))} />
+          </Field>
+        )}
+        <Btn variant="accent" className="w-full mt-1" disabled={useCustomDate && !customDate}
+          onClick={() => onSnooze({ fromIso: todayISO(), days: snoozeDays, explicitDate: useCustomDate ? customDate : null })}>
+          <Check size={16} /> Confirm
+        </Btn>
+      </Modal>
+    );
+  }
+
+  return (
+    <Modal title="Time to re-input your allowance" onClose={onClose}>
+      <p className="text-sm mb-4" style={{ color: C.inkSoft, fontFamily: "'Public Sans', sans-serif" }}>
+        Has your {profile.frequency.toLowerCase()} allowance changed (OT, bonus, deductions)?
+      </p>
+      <div className="space-y-2">
+        <Btn variant="accent" className="w-full" onClick={() => setMode("setAmount")}>Set amount</Btn>
+        <Btn variant="ghost" className="w-full" onClick={onLeaveSame}>Leave the same</Btn>
+        <Btn variant="ghost" className="w-full" onClick={() => setMode("snooze")}>Remind me again</Btn>
+      </div>
     </Modal>
   );
 }
@@ -1693,6 +1754,7 @@ export default function App() {
   const [showLogModal, setShowLogModal] = useState(false);
   const [showAllowanceModal, setShowAllowanceModal] = useState(false);
   const [showMacroCheckInModal, setShowMacroCheckInModal] = useState(false);
+  const [showAllowanceReminderModal, setShowAllowanceReminderModal] = useState(false);
   const [notifStatus, setNotifStatus] = useState(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
 
   useEffect(() => {
@@ -1852,6 +1914,19 @@ export default function App() {
     setProfile(next); persist({ profile: next });
   }
 
+  function handleReminderSetAmount(amount) {
+    submitAllowance({ amount, currency: profile.currency });
+    setShowAllowanceReminderModal(false);
+  }
+  function handleReminderLeaveSame() {
+    submitAllowance({ amount: Number(profile.allowance) || 0, currency: profile.currency });
+    setShowAllowanceReminderModal(false);
+  }
+  function handleReminderSnooze({ fromIso, days, explicitDate }) {
+    snoozeAllowanceReminder(computeSnoozeDate({ fromIso, days, explicitDate }));
+    setShowAllowanceReminderModal(false);
+  }
+
   function changeFrequency(freq) {
     const next = {
       ...profile,
@@ -1946,6 +2021,15 @@ export default function App() {
 
       {showLogModal && <LogModal currencySymbol={symbol} onClose={() => setShowLogModal(false)} onSave={addLog} />}
       {showAllowanceModal && <AllowanceModal profile={profile} onClose={() => setShowAllowanceModal(false)} onSave={submitAllowance} />}
+      {showAllowanceReminderModal && (
+        <AllowanceReminderModal
+          profile={profile} symbol={symbol}
+          onClose={() => setShowAllowanceReminderModal(false)}
+          onSetAmount={handleReminderSetAmount}
+          onLeaveSame={handleReminderLeaveSame}
+          onSnooze={handleReminderSnooze}
+        />
+      )}
       {showMacroCheckInModal && (
         <MacroCheckInModal
           profile={profile} logs={logs} budgetSplit={budgetSplit} expenses={expenses} symbol={symbol}
