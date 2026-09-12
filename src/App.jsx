@@ -13,6 +13,7 @@ import {
   toLocalISODate, parseLocalDate, todayISO, daysBetween, addDays, FREQ_DAYS,
   computeNextAllowanceReminderDate, computeSnoozeDate,
   getActiveSlideIds, allowanceSlideMode,
+  isItemPurchasable, applyWantPurchase, undoWantPurchase,
 } from "./lib/budgetMath.js";
 
 const C = {
@@ -1414,13 +1415,12 @@ function TargetItemCard({ item, symbol, purchasable, onDelete, onComplete, onTap
             {fmt(item.cost, symbol)}
           </div>
           {purchasable ? (
-            <button
-              onClick={(e) => { e.stopPropagation(); onComplete(); }}
-              className="mt-1 text-[11px] font-semibold px-2 py-0.5 rounded"
+            <span
+              className="mt-1 inline-block text-[11px] font-semibold px-2 py-0.5 rounded"
               style={{ background: C.mossBg, color: C.moss }}
             >
               Affordable ✓
-            </button>
+            </span>
           ) : (
             <div className="text-[10px]" style={{ color: C.slate }}>Save more</div>
           )}
@@ -1547,14 +1547,14 @@ function DailyVelocityRow({ label, spent, cap, symbol, color }) {
     </Card>
   );
 }
-function WishlistModal({ items, symbol, balance, onClose, onDelete, onComplete, onTap }) {
+function WishlistModal({ items, symbol, balance, wantsPool, onClose, onDelete, onComplete, onTap }) {
   const sorted = sortByRelevance(items.filter((i) => !i.purchased), balance);
   return (
     <Modal title="Full wishlist" onClose={onClose}>
       <div className="space-y-2 max-h-[60vh] overflow-y-auto">
         {sorted.length === 0 && <EmptyRow text="Nothing in your wishlist" />}
         {sorted.map((item) => (
-          <TargetItemCard key={item.id} item={item} symbol={symbol} purchasable={balance >= item.cost}
+          <TargetItemCard key={item.id} item={item} symbol={symbol} purchasable={isItemPurchasable(item, balance, wantsPool)}
             onDelete={() => onDelete(item.id)} onComplete={() => onComplete(item)} onTap={() => onTap(item)} />
         ))}
       </div>
@@ -1565,7 +1565,8 @@ function Strategy({ state, symbol, checkInDue, daysToCheckIn, onCheckIn, onSkipC
   const { profile, items, expenses, logs, budgetSplit } = state;
   const balance = computeBalance(profile, logs);
   const allowance = Number(profile.allowance) || 0;
-  
+  const wantsPool = profile.wantsPool || 0;
+
   const needsCash = (allowance * budgetSplit.needs) / 100;
   const wantsCash = (allowance * budgetSplit.wants) / 100;
   const savingsCash = (allowance * budgetSplit.savings) / 100;
@@ -1654,7 +1655,7 @@ function Strategy({ state, symbol, checkInDue, daysToCheckIn, onCheckIn, onSkipC
             key={item.id}
             item={item}
             symbol={symbol}
-            purchasable={balance >= item.cost}
+            purchasable={isItemPurchasable(item, balance, wantsPool)}
             onDelete={() => onDeleteItem(item.id)}
             onComplete={() => onMarkPurchased(item)}
             onTap={() => setEditingItem(item)}
@@ -1699,7 +1700,7 @@ function Strategy({ state, symbol, checkInDue, daysToCheckIn, onCheckIn, onSkipC
         />
       )}
       {showWishlist && (
-        <WishlistModal items={items} symbol={symbol} balance={balance} onClose={() => setShowWishlist(false)}
+        <WishlistModal items={items} symbol={symbol} balance={balance} wantsPool={wantsPool} onClose={() => setShowWishlist(false)}
           onDelete={onDeleteItem} onComplete={onMarkPurchased} onTap={(item) => setEditingItem(item)} />
       )}
       {showEditPlan && (
@@ -1946,13 +1947,25 @@ export default function App() {
       amount: item.cost, note: item.name, date: todayISO(),
     }];
     setItems(nextItems); setLogs(nextLogs);
-    persist({ items: nextItems, logs: nextLogs });
+    const patch = { items: nextItems, logs: nextLogs };
+    if (item.type === "want") {
+      const nextProfile = { ...profile, wantsPool: applyWantPurchase(profile.wantsPool, item.cost) };
+      setProfile(nextProfile);
+      patch.profile = nextProfile;
+    }
+    persist(patch);
   }
   function undoPurchase(item) {
     const nextItems = items.map((i) => (i.id === item.id ? { ...i, purchased: false, purchasedDate: null, purchaseLogId: null } : i));
     const nextLogs = item.purchaseLogId ? logs.filter((l) => l.id !== item.purchaseLogId) : logs;
     setItems(nextItems); setLogs(nextLogs);
-    persist({ items: nextItems, logs: nextLogs });
+    const patch = { items: nextItems, logs: nextLogs };
+    if (item.type === "want") {
+      const nextProfile = { ...profile, wantsPool: undoWantPurchase(profile.wantsPool, item.cost) };
+      setProfile(nextProfile);
+      patch.profile = nextProfile;
+    }
+    persist(patch);
   }
   function deletePurchase(item) {
     const nextItems = items.filter((i) => i.id !== item.id);
