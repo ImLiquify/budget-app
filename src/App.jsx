@@ -1025,11 +1025,6 @@ function Dashboard({ state, symbol, dueSoon, onOpenLog, onCheckIn, setView }) {
           </div>
         </div>
 
-        {dueSoon && (
-          <Banner onAction={onCheckIn} actionLabel="Check in">
-            Weekly Macro Strategy Check-in is due!
-          </Banner>
-        )}
         {overspent && (
           <Banner>
             <span style={{ color: C.danger, fontWeight: 700 }}>
@@ -1072,6 +1067,10 @@ function Dashboard({ state, symbol, dueSoon, onOpenLog, onCheckIn, setView }) {
             <Stat label="Spent" value={fmt(totalSpent, symbol)} tone={overspent ? C.danger : undefined} />
             <Stat label="Allowance" value={fmt(totalAllowance, symbol)} />
             <Stat label="Cash Balance" value={fmt(balance, symbol)} tone={balance < 0 ? C.danger : C.moss} />
+          </div>
+          <div className="grid grid-cols-2 gap-2 mt-3 pt-3" style={{ borderTop: `1px solid ${C.line}` }}>
+            <Stat label="Savings Pool" value={fmt(profile.savingsPool || 0, symbol)} tone={C.brass} />
+            <Stat label="Wants Pool" value={fmt(profile.wantsPool || 0, symbol)} tone={C.clay} />
           </div>
         </Card>
 
@@ -1537,6 +1536,11 @@ function Strategy({ state, symbol, checkInDue, daysToCheckIn, onCheckIn, onSkipC
             💡 <strong>{fmt(committedNeedsPeriod, symbol)}</strong> in fixed expenses auto-deducted from Needs. Available flex Needs cash: <strong>{fmt(flexNeedsCash, symbol)}</strong>.
           </div>
         )}
+      </Card>
+
+      <Card className="mb-5 grid grid-cols-2 gap-2">
+        <Stat label="Savings Pool" value={fmt(profile.savingsPool || 0, symbol)} tone={C.brass} />
+        <Stat label="Wants Pool" value={fmt(profile.wantsPool || 0, symbol)} tone={C.clay} />
       </Card>
 
       {/* Target Items List */}
