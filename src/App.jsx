@@ -11,6 +11,7 @@ import {
 } from "recharts";
 import {
   toLocalISODate, parseLocalDate, todayISO, daysBetween, addDays, FREQ_DAYS,
+  computeNextAllowanceReminderDate,
 } from "./lib/budgetMath.js";
 
 const C = {
@@ -728,6 +729,8 @@ function Onboarding({ onComplete }) {
         name: name.trim() || "You", currency, frequency, allowance: Number(allowance) || 0,
         lastAllowanceUpdate: today, memberSince: today, totalReceived: Number(allowance) || 0,
         checkInDay: 1, nextCheckInDate: nextWeekday(today, 1), isGoogleConnected: false,
+        savingsPool: 0, wantsPool: 0, allowanceReminderSnoozed: false,
+        nextAllowanceReminderDate: computeNextAllowanceReminderDate(today, frequency),
       },
       items, expenses, budgetSplit: split, suggestedSplit: suggested,
     });
@@ -1708,6 +1711,11 @@ export default function App() {
               tier: p.tier || "free",
               isGoogleConnected: p.isGoogleConnected || false,
               remindersEnabled: p.remindersEnabled ?? true,
+              savingsPool: p.savingsPool ?? 0,
+              wantsPool: p.wantsPool ?? 0,
+              allowanceReminderSnoozed: p.allowanceReminderSnoozed ?? false,
+              nextAllowanceReminderDate: p.nextAllowanceReminderDate
+                ?? computeNextAllowanceReminderDate(p.lastAllowanceUpdate || today, p.frequency),
             };
             p = { ...p, ...patched };
           }
