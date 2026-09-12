@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toLocalISODate, parseLocalDate, todayISO, daysBetween, addDays, FREQ_DAYS } from "./budgetMath.js";
+import { toLocalISODate, parseLocalDate, todayISO, daysBetween, addDays, FREQ_DAYS, computeNextAllowanceReminderDate, computeSnoozeDate } from "./budgetMath.js";
 
 describe("toLocalISODate", () => {
   it("formats a Date as YYYY-MM-DD using local fields", () => {
@@ -46,5 +46,26 @@ describe("FREQ_DAYS", () => {
     expect(FREQ_DAYS.Weekly).toBe(7);
     expect(FREQ_DAYS.Daily).toBe(1);
     expect(FREQ_DAYS.Yearly).toBe(365);
+  });
+});
+
+describe("computeNextAllowanceReminderDate", () => {
+  it("adds the frequency's day count to the given date", () => {
+    expect(computeNextAllowanceReminderDate("2026-09-05", "Monthly")).toBe(addDays("2026-09-05", 30));
+    expect(computeNextAllowanceReminderDate("2026-09-05", "Weekly")).toBe(addDays("2026-09-05", 7));
+    expect(computeNextAllowanceReminderDate("2026-09-05", "Daily")).toBe(addDays("2026-09-05", 1));
+    expect(computeNextAllowanceReminderDate("2026-09-05", "Yearly")).toBe(addDays("2026-09-05", 365));
+  });
+  it("falls back to 30 days for an unrecognized frequency", () => {
+    expect(computeNextAllowanceReminderDate("2026-09-05", "Bogus")).toBe(addDays("2026-09-05", 30));
+  });
+});
+
+describe("computeSnoozeDate", () => {
+  it("adds the preset day offset when no explicit date is given", () => {
+    expect(computeSnoozeDate({ fromIso: "2026-09-12", days: 7, explicitDate: null })).toBe("2026-09-19");
+  });
+  it("uses the explicit date when provided, ignoring days", () => {
+    expect(computeSnoozeDate({ fromIso: "2026-09-12", days: 7, explicitDate: "2026-10-01" })).toBe("2026-10-01");
   });
 });

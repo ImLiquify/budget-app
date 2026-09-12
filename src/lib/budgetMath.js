@@ -27,3 +27,12 @@ export const FREQ_DAYS = {
   day: 1, week: 7, month: 30, year: 365,
   Weekly: 7, weekly: 7
 };
+
+export function computeNextAllowanceReminderDate(fromIso, frequency) {
+  return addDays(fromIso, FREQ_DAYS[frequency] || 30);
+}
+
+export function computeSnoozeDate({ fromIso, days, explicitDate }) {
+  if (explicitDate) return explicitDate;
+  return addDays(fromIso, days);
+}
