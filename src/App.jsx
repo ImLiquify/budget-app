@@ -1553,7 +1553,7 @@ function Strategy({ state, symbol, checkInDue, daysToCheckIn, onCheckIn, onSkipC
   );
 }
 
-function ProfilePage({ state, symbol, onUpdateProfile, onAddItem, onDeleteItem, onAddExpense, onDeleteExpense, onReset, onToggleNotif, onOpenAllowanceModal, onGoogleSignInSuccess, onGoogleSignOut }) {
+function ProfilePage({ state, symbol, onUpdateProfile, onAddItem, onDeleteItem, onAddExpense, onDeleteExpense, onReset, onToggleNotif, onOpenAllowanceModal, onGoogleSignInSuccess, onGoogleSignOut, onChangeFrequency }) {
   const { profile, items, expenses, logs } = state;
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
@@ -1603,7 +1603,7 @@ function ProfilePage({ state, symbol, onUpdateProfile, onAddItem, onDeleteItem, 
             <Select value={profile.currency} onChange={(e) => onUpdateProfile({ currency: e.target.value })} options={CURRENCIES.map((c) => ({ value: c.code, label: `${c.code} (${c.symbol})` }))} />
           </Field>
           <Field label="Frequency">
-            <Select value={profile.frequency} onChange={(e) => onUpdateProfile({ frequency: e.target.value })} options={FREQUENCIES.map((f) => ({ value: f, label: f }))} />
+            <Select value={profile.frequency} onChange={(e) => onChangeFrequency(e.target.value)} options={FREQUENCIES.map((f) => ({ value: f, label: f }))} />
           </Field>
         </div>
         <Field label="Membership tier">
@@ -1841,6 +1841,22 @@ export default function App() {
       dailyCapOverride: null,
       dailyNeedsCap: null,
       dailyWantsCap: null,
+      nextAllowanceReminderDate: computeNextAllowanceReminderDate(todayISO(), profile.frequency),
+      allowanceReminderSnoozed: false,
+    };
+    setProfile(next); persist({ profile: next });
+  }
+
+  function snoozeAllowanceReminder(newDate) {
+    const next = { ...profile, nextAllowanceReminderDate: newDate, allowanceReminderSnoozed: true };
+    setProfile(next); persist({ profile: next });
+  }
+
+  function changeFrequency(freq) {
+    const next = {
+      ...profile,
+      frequency: freq,
+      nextAllowanceReminderDate: computeNextAllowanceReminderDate(profile.lastAllowanceUpdate || todayISO(), freq),
     };
     setProfile(next); persist({ profile: next });
   }
@@ -1922,6 +1938,7 @@ export default function App() {
           onAddExpense={addExpense} onDeleteExpense={deleteExpense} onReset={resetAll} onToggleNotif={toggleNotif}
           onOpenAllowanceModal={() => setShowAllowanceModal(true)}
           onGoogleSignInSuccess={handleGoogleSignInSuccess} onGoogleSignOut={handleGoogleSignOut}
+          onChangeFrequency={changeFrequency}
         />
       )}
 
