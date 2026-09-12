@@ -22,10 +22,11 @@ silently inflating tomorrow's cap), and to fix the wishlist affordability
 check so it only draws on money actually earmarked for discretionary
 "wants" purchases.
 
-The intended outcome is three connected features, designed together
+The intended outcome is four connected features, designed together
 because they share data (the weekly check-in produces the banked amounts
 that both the reminder-driven allowance renewal and the wishlist
-affordability check depend on):
+affordability check depend on, and the Dashboard banner surfaces state
+from both the reminder and check-in flows):
 
 1. A recurring allowance/salary re-input reminder.
 2. The weekly check-in learning from under-spent days and banking the
@@ -34,6 +35,8 @@ affordability check depend on):
 3. Wishlist "want" items checking affordability against the new Wants
    pool instead of total cash balance, and the "Affordable" badge
    becoming a non-interactive tag.
+4. A single, auto-rotating Dashboard banner (quotes + check-in/allowance
+   prompts) that replaces today's separate due-banners.
 
 No push notifications requiring a backend are in scope — see "Out of
 scope" below.
@@ -52,6 +55,7 @@ fields like `checkInDay` and `tier` today (`App.jsx:1717-1750`).
 | `nextAllowanceReminderDate` | ISO date string | computed on patch | Next date the allowance re-input reminder should fire. |
 | `savingsPool` | number | `0` | Running total of Needs-flex money identified as under-spent at past weekly check-ins. A labeled breakdown of the existing cash balance — **not** money on top of it. |
 | `wantsPool` | number | `0` | Running total of Wants money identified as under-spent at past weekly check-ins, minus what's been spent on purchased "want"-type wishlist items. Also a labeled breakdown of the existing balance. |
+| `allowanceReminderSnoozed` | boolean | `false` | Whether the current reminder cycle was deferred via "Remind me again." Drives Flow 4's countdown slide; cleared whenever the allowance is actually renewed. |
 
 `nextAllowanceReminderDate` default-patch logic: if missing, compute as
 `addDays(profile.lastAllowanceUpdate, FREQ_DAYS[profile.frequency])`
@@ -62,15 +66,16 @@ No changes to `items`, `expenses`, or `logs` shapes.
 
 ## Flow 1 — Allowance reminder
 
-**Trigger:** A `Banner` (reusing the existing `Banner` component) appears
-on the Dashboard, using the same due/not-due pattern as the existing
-weekly check-in banner (`checkInDue` in `App.jsx:1899`), gated on
-`todayISO() >= profile.nextAllowanceReminderDate`. This works for
-whatever `frequency` the user has chosen (Daily/Weekly/Monthly/Yearly) —
-not hardcoded to monthly.
+**Trigger:** originally designed as its own top-of-Dashboard `Banner`,
+this is now **superseded by Flow 4** — the allowance-due/snoozed prompt
+lives in the Flow 4 carousel instead of a separate banner. What remains
+of Flow 1 here is the underlying due calculation
+(`todayISO() >= profile.nextAllowanceReminderDate`, working for whatever
+`frequency` the user has chosen) and the modal + state functions below,
+which Flow 4 triggers.
 
-**New component `AllowanceReminderModal`**, opened from the banner's
-action button. Presents three primary actions:
+**New component `AllowanceReminderModal`**, opened from Flow 4's
+carousel "Input now" button. Presents three primary actions:
 
 - **Set amount** — reveals an amount input (same pattern as the existing
   `AllowanceModal`). Confirming calls the (extended) `submitAllowance`.
@@ -85,16 +90,17 @@ action button. Presents three primary actions:
 current behavior (set allowance/currency, reset `lastAllowanceUpdate`,
 increment `totalReceived`, clear `dailyCapOverride`/`dailyNeedsCap`/
 `dailyWantsCap`), it now also sets
-`nextAllowanceReminderDate = addDays(todayISO(), FREQ_DAYS[frequency])`.
-This makes both entry points — the existing manual "Allowance Base"
-editor on the Profile page, and the new reminder modal — behave
-consistently: any time the allowance is (re-)confirmed, the reminder
-clock restarts.
+`nextAllowanceReminderDate = addDays(todayISO(), FREQ_DAYS[frequency])`
+and `allowanceReminderSnoozed = false`. This makes both entry points —
+the existing manual "Allowance Base" editor on the Profile page, and the
+new reminder modal — behave consistently: any time the allowance is
+(re-)confirmed, the reminder clock restarts and any pending snooze
+countdown (Flow 4) clears.
 
 **`snoozeAllowanceReminder(newDate)`** (new function in `App.jsx`,
-alongside `skipCheckIn`): sets only
-`profile.nextAllowanceReminderDate = newDate`; nothing else about the
-profile changes.
+alongside `skipCheckIn`): sets `profile.nextAllowanceReminderDate =
+newDate` and `profile.allowanceReminderSnoozed = true`; nothing else
+about the profile changes.
 
 **Frequency changes:** when the user changes `profile.frequency` on the
 Profile page, also recompute
@@ -165,6 +171,42 @@ gesture (`SwipeCard`'s `onSwipeLeft={purchasable ? onComplete : undefined}`)
 remains the only way to mark an item purchased — that gating logic is
 unchanged, it simply now reflects the new pool-based `purchasable` value.
 
+## Flow 4 — Dashboard carousel banner
+
+**Position:** new `DashboardCarouselBanner` component, rendered inside
+the existing "Safe to spend" `Card` in `Dashboard` (`App.jsx:1009-1034`),
+directly below `<Rings>` and its "Today vs. daily caps" caption, above
+the Spent/Allowance/Cash-Balance stat grid.
+
+**Behavior:** an auto-rotating carousel, advancing every 8 seconds via a
+`setInterval` inside a `useEffect`. At any given moment 1 to 3 slides are
+"active," and the carousel cycles only through the currently-active set
+(recomputed whenever the underlying due/snooze state changes):
+
+1. **Quote slide** — always active. Each rotation onto this slide draws a
+   random line from a combined pool of:
+   - Short static motivational lines with the user's name woven in
+     (e.g. "You're doing great, {name}.")
+   - Budget-aware dynamic lines computed from live state — today's pace,
+     `safeToSpend`, `savingsPool`/`wantsPool` (Flow 2/3) — also
+     name-personalized (e.g. "{name}, you've got {fmt(safeToSpend)} left
+     today — nice pace.")
+2. **Check-in slide** — active whenever `checkInDue` is true (existing
+   calculation at `App.jsx:1899`). Its button, "Check in now," opens the
+   existing `MacroCheckInModal`, unchanged.
+3. **Allowance slide** — active whenever EITHER the allowance reminder is
+   actually due (`todayISO() >= profile.nextAllowanceReminderDate`,
+   shows a "due now" message) OR the user has snoozed it and it isn't due
+   yet (`profile.allowanceReminderSnoozed === true` and not yet due,
+   shows "X days until re-input" via `daysBetween`). Its button, "Input
+   now," opens `AllowanceReminderModal` (Flow 1) in either case.
+
+**Superseded top banners:** the existing top-of-Dashboard `dueSoon &&
+<Banner>` block (`App.jsx:986-990`) is removed, and Flow 1's originally
+planned top allowance-due banner is dropped — this carousel is the single
+unified notification surface for both, rather than duplicating them
+above and below the rings.
+
 ## Visibility — new UI
 
 Two new stat tiles, using the existing `Stat` component pattern:
@@ -172,7 +214,8 @@ Two new stat tiles, using the existing `Stat` component pattern:
 - **Dashboard** (`App.jsx:918-1081`): add "Savings Pool" and "Wants Pool"
   to the stat row alongside the existing Spent/Allowance/Cash Balance
   stats (or a second row if space is tight — implementation's call,
-  following the existing grid pattern).
+  following the existing grid pattern). Independent of the Flow 4
+  carousel banner, which sits above this stat grid.
 - **Strategy** (`App.jsx:1429-1573`): add the same two figures near the
   existing `SplitChip` row, so the split percentages and the banked pool
   totals are visible together.
@@ -216,12 +259,18 @@ rest of the app. New unit tests should cover:
   explicit chosen date).
 - Pool arithmetic: banking on check-in apply, decrement on want purchase,
   add-back on undo, floor-at-zero behavior.
+- Flow 4 slide-activation logic: which slides are active for combinations
+  of `checkInDue`, due-date vs. today, and `allowanceReminderSnoozed`;
+  and the `allowanceReminderSnoozed` set/reset behavior itself (already
+  covered by the `submitAllowance`/`snoozeAllowanceReminder` tests above,
+  but explicitly assert the flag alongside the date).
 
 Manual verification (in the browser, via `npm run dev`) covers the UI
-flows: reminder banner appearing/disappearing, all three reminder modal
-actions, the weekly check-in's new banked-amount card, the wishlist
-badge no longer being clickable, and the new stat tiles rendering
-correctly.
+flows: the carousel banner rotating on its 8s timer, showing the correct
+slide set as due/snoozed state changes, both its action buttons opening
+the right modals, all three reminder modal actions, the weekly
+check-in's new banked-amount card, the wishlist badge no longer being
+clickable, and the new stat tiles rendering correctly.
 
 ## Out of scope
 
