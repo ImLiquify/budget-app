@@ -732,6 +732,11 @@ function WeeklyCheckInModal({ profile, logs, budgetSplit, expenses, symbol, onCl
     [logs, dailyFlexNeeds, dailyWants]
   );
 
+  const { toSavings: previewToSavings, toWants: previewToWants } = useMemo(
+    () => allocateUnderspend({ weeklyNeedsUnderspend, weeklyWantsUnderspend, allocation }),
+    [weeklyNeedsUnderspend, weeklyWantsUnderspend, allocation]
+  );
+
   return (
     <Modal title="Weekly Strategy Check-In" onClose={onClose}>
       <div className="space-y-4">
@@ -777,6 +782,23 @@ function WeeklyCheckInModal({ profile, logs, budgetSplit, expenses, symbol, onCl
             value={allocation}
             onChange={setAllocation}
           />
+          <div className="mt-2.5 p-2.5 rounded-lg text-xs" style={{ background: C.paper, border: `1px solid ${C.line}` }}>
+            <div className="flex justify-between items-baseline">
+              <span style={{ color: C.slate }}>→ Savings pool</span>
+              <strong className="tabular-nums" style={{ color: C.moss, fontFamily: "'IBM Plex Mono', monospace" }}>{fmt(previewToSavings, symbol)}</strong>
+            </div>
+            {previewToWants > 0 && (
+              <div className="flex justify-between items-baseline mt-1">
+                <span style={{ color: C.slate }}>→ Wants pool</span>
+                <strong className="tabular-nums" style={{ color: C.clay, fontFamily: "'IBM Plex Mono', monospace" }}>{fmt(previewToWants, symbol)}</strong>
+              </div>
+            )}
+            <p className="mt-2 text-[10px] leading-relaxed" style={{ color: C.slate }}>
+              {allocation === "split"
+                ? "Unused Needs money goes to your Savings pool; unused Wants money goes to your Wants pool — each stays earmarked for what it was budgeted for."
+                : "Both unused Needs and Wants money go straight into your Savings pool, growing your safety net faster."}
+            </p>
+          </div>
         </Card>
 
         <Card style={{ background: C.brassBg, borderColor: `${C.brass}55` }}>
@@ -804,12 +826,11 @@ function WeeklyCheckInModal({ profile, logs, budgetSplit, expenses, symbol, onCl
             variant="accent"
             className="w-full text-xs"
             onClick={() => {
-              const { toSavings, toWants } = allocateUnderspend({ weeklyNeedsUnderspend, weeklyWantsUnderspend, allocation });
               onApplyRecommendation({
                 split: smartSplitRecommendation,
                 dailyCap: Number(recommendedDailyCap),
-                weeklyNeedsUnderspend: toSavings,
-                weeklyWantsUnderspend: toWants,
+                weeklyNeedsUnderspend: previewToSavings,
+                weeklyWantsUnderspend: previewToWants,
               });
             }}
           >
