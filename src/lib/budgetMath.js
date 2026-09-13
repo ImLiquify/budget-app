@@ -80,14 +80,22 @@ export function allowanceSlideMode({ nextAllowanceReminderDate, todayIso }) {
   return todayIso >= nextAllowanceReminderDate ? "due" : "countdown";
 }
 
-export function getActiveSlideIds({ checkInDue, nextAllowanceReminderDate, allowanceReminderSnoozed, todayIso }) {
+export function getActiveSlideIds({ checkInDue, nextAllowanceReminderDate, allowanceReminderSnoozedDate, todayIso }) {
   const slides = ["quote"];
   if (checkInDue) slides.push("checkin");
   const mode = allowanceSlideMode({ nextAllowanceReminderDate, todayIso });
-  if (mode === "due" || allowanceReminderSnoozed) slides.push("allowance");
+  const snoozedToday = !!allowanceReminderSnoozedDate && allowanceReminderSnoozedDate === todayIso;
+  if (mode === "due" || snoozedToday) slides.push("allowance");
   return slides;
 }
 
 export function shouldBankUnderspend(lastBankDateIso, todayIso) {
   return !lastBankDateIso || daysBetween(lastBankDateIso, todayIso) >= 7;
+}
+
+export function allocateUnderspend({ weeklyNeedsUnderspend, weeklyWantsUnderspend, allocation }) {
+  if (allocation === "savings") {
+    return { toSavings: weeklyNeedsUnderspend + weeklyWantsUnderspend, toWants: 0 };
+  }
+  return { toSavings: weeklyNeedsUnderspend, toWants: weeklyWantsUnderspend };
 }

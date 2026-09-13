@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toLocalISODate, parseLocalDate, todayISO, daysBetween, addDays, FREQ_DAYS, computeNextAllowanceReminderDate, computeSnoozeDate, computeWeeklyUnderspend, bankUnderspend, applyWantPurchase, undoWantPurchase, isWantAffordable, isItemPurchasable, getActiveSlideIds, allowanceSlideMode, shouldBankUnderspend } from "./budgetMath.js";
+import { toLocalISODate, parseLocalDate, todayISO, daysBetween, addDays, FREQ_DAYS, computeNextAllowanceReminderDate, computeSnoozeDate, computeWeeklyUnderspend, bankUnderspend, applyWantPurchase, undoWantPurchase, isWantAffordable, isItemPurchasable, getActiveSlideIds, allowanceSlideMode, shouldBankUnderspend, allocateUnderspend } from "./budgetMath.js";
 
 describe("toLocalISODate", () => {
   it("formats a Date as YYYY-MM-DD using local fields", () => {
@@ -157,7 +157,7 @@ describe("isItemPurchasable", () => {
 });
 
 describe("getActiveSlideIds", () => {
-  const base = { checkInDue: false, nextAllowanceReminderDate: "2026-09-20", allowanceReminderSnoozed: false, todayIso: "2026-09-12" };
+  const base = { checkInDue: false, nextAllowanceReminderDate: "2026-09-20", allowanceReminderSnoozedDate: null, todayIso: "2026-09-12" };
 
   it("only includes the quote slide when nothing is due or snoozed", () => {
     expect(getActiveSlideIds(base)).toEqual(["quote"]);
@@ -168,10 +168,13 @@ describe("getActiveSlideIds", () => {
   it("does not include the allowance slide before due, even without a snooze", () => {
     expect(getActiveSlideIds(base)).not.toContain("allowance");
   });
-  it("includes the allowance slide once snoozed, before the due date", () => {
-    expect(getActiveSlideIds({ ...base, allowanceReminderSnoozed: true })).toEqual(["quote", "allowance"]);
+  it("includes the allowance slide only on the day the reminder was snoozed", () => {
+    expect(getActiveSlideIds({ ...base, allowanceReminderSnoozedDate: "2026-09-12" })).toEqual(["quote", "allowance"]);
   });
-  it("includes the allowance slide once actually due, regardless of the snooze flag", () => {
+  it("stops including the allowance slide the day after it was snoozed, before it's due", () => {
+    expect(getActiveSlideIds({ ...base, allowanceReminderSnoozedDate: "2026-09-11" })).toEqual(["quote"]);
+  });
+  it("includes the allowance slide once actually due, regardless of the snooze date", () => {
     expect(getActiveSlideIds({ ...base, todayIso: "2026-09-25" })).toEqual(["quote", "allowance"]);
   });
   it("includes all three slides when everything is active", () => {
@@ -198,5 +201,14 @@ describe("shouldBankUnderspend", () => {
   });
   it("allows banking again once 7 or more days have passed", () => {
     expect(shouldBankUnderspend("2026-09-05", "2026-09-12")).toBe(true);
+  });
+});
+
+describe("allocateUnderspend", () => {
+  it("splits needs underspend to savings and wants underspend to the wants pool by default", () => {
+    expect(allocateUnderspend({ weeklyNeedsUnderspend: 100, weeklyWantsUnderspend: 50, allocation: "split" })).toEqual({ toSavings: 100, toWants: 50 });
+  });
+  it("routes everything to savings when the user chooses savings-only", () => {
+    expect(allocateUnderspend({ weeklyNeedsUnderspend: 100, weeklyWantsUnderspend: 50, allocation: "savings" })).toEqual({ toSavings: 150, toWants: 0 });
   });
 });
