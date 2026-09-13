@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toLocalISODate, parseLocalDate, todayISO, daysBetween, addDays, FREQ_DAYS, computeNextAllowanceReminderDate, computeSnoozeDate, computeWeeklyUnderspend, bankUnderspend, applyWantPurchase, undoWantPurchase, isWantAffordable, isItemPurchasable, getActiveSlideIds, allowanceSlideMode, shouldBankUnderspend, allocateUnderspend } from "./budgetMath.js";
+import { toLocalISODate, parseLocalDate, todayISO, daysBetween, addDays, FREQ_DAYS, computeNextAllowanceReminderDate, computeSnoozeDate, computeWeeklyUnderspend, bankUnderspend, applyWantPurchase, undoWantPurchase, isWantAffordable, isItemPurchasable, getActiveSlideIds, allowanceSlideMode, shouldBankUnderspend, allocateUnderspend, computeSmartDailyCap } from "./budgetMath.js";
 
 describe("toLocalISODate", () => {
   it("formats a Date as YYYY-MM-DD using local fields", () => {
@@ -210,5 +210,27 @@ describe("allocateUnderspend", () => {
   });
   it("routes everything to savings when the user chooses savings-only", () => {
     expect(allocateUnderspend({ weeklyNeedsUnderspend: 100, weeklyWantsUnderspend: 50, allocation: "savings" })).toEqual({ toSavings: 150, toWants: 0 });
+  });
+});
+
+describe("computeSmartDailyCap", () => {
+  it("holds the cap steady at the planned rate when spending is at or under plan", () => {
+    expect(computeSmartDailyCap({ remainingCash: 300, daysRemaining: 20, recentAvgDaily: 8, plannedDailyCap: 10 })).toEqual({ recommendedCap: 10, status: "on-pace" });
+  });
+  it("does not inflate the cap just because remaining balance is generous, avoiding wasteful spend-up", () => {
+    expect(computeSmartDailyCap({ remainingCash: 1000, daysRemaining: 20, recentAvgDaily: 8, plannedDailyCap: 10 })).toEqual({ recommendedCap: 10, status: "on-pace" });
+  });
+  it("raises the cap to match real habit when overspending is still sustainable through the period", () => {
+    expect(computeSmartDailyCap({ remainingCash: 280, daysRemaining: 20, recentAvgDaily: 14, plannedDailyCap: 10 })).toEqual({ recommendedCap: 14, status: "adjusted-up" });
+  });
+  it("caps at the sustainable rate and flags at-risk when the recent pace would run out the balance", () => {
+    expect(computeSmartDailyCap({ remainingCash: 200, daysRemaining: 20, recentAvgDaily: 14, plannedDailyCap: 10 })).toEqual({ recommendedCap: 10, status: "at-risk" });
+  });
+  it("flags at-risk even while under the planned rate, if the plan itself is no longer sustainable", () => {
+    expect(computeSmartDailyCap({ remainingCash: 100, daysRemaining: 20, recentAvgDaily: 4, plannedDailyCap: 10 })).toEqual({ recommendedCap: 5, status: "at-risk" });
+  });
+  it("never recommends a cap above what the remaining balance can sustain", () => {
+    const { recommendedCap } = computeSmartDailyCap({ remainingCash: 140, daysRemaining: 20, recentAvgDaily: 50, plannedDailyCap: 10 });
+    expect(recommendedCap).toBeLessThanOrEqual(140 / 20);
   });
 });

@@ -14,7 +14,7 @@ import {
   computeNextAllowanceReminderDate, computeSnoozeDate,
   getActiveSlideIds, allowanceSlideMode, shouldBankUnderspend,
   isItemPurchasable, applyWantPurchase, undoWantPurchase,
-  computeWeeklyUnderspend, bankUnderspend, allocateUnderspend,
+  computeWeeklyUnderspend, bankUnderspend, allocateUnderspend, computeSmartDailyCap,
 } from "./lib/budgetMath.js";
 
 const C = {
@@ -711,7 +711,6 @@ function WeeklyCheckInModal({ profile, logs, budgetSplit, expenses, symbol, onCl
   const targetWeeklySpend = totalAllowance / (daysInPeriod / 7);
   const weeklyVariance = totalSpent7 - targetWeeklySpend;
 
-  const recommendedDailyCap = (remainingCash / daysRemaining).toFixed(2);
   const committedNeedsMonthly = expenses
     .filter((e) => e.category === "needs")
     .reduce((s, e) => s + expenseMonthly(e.amount, e.freq), 0);
@@ -726,6 +725,14 @@ function WeeklyCheckInModal({ profile, logs, budgetSplit, expenses, symbol, onCl
   const flexNeedsBudget = Math.max(0, grossNeedsBudget - committedNeedsPeriod);
   const dailyFlexNeeds = profile.dailyNeedsCap != null ? profile.dailyNeedsCap : flexNeedsBudget / daysInPeriod;
   const dailyWants = profile.dailyWantsCap != null ? profile.dailyWantsCap : wantsBudgetTotal / daysInPeriod;
+  const plannedDailyCap = dailyFlexNeeds + dailyWants;
+  const recentAvgDaily = totalSpent7 / 7;
+
+  const { recommendedCap, status: dailyCapStatus } = useMemo(
+    () => computeSmartDailyCap({ remainingCash, daysRemaining, recentAvgDaily, plannedDailyCap }),
+    [remainingCash, daysRemaining, recentAvgDaily, plannedDailyCap]
+  );
+  const recommendedDailyCap = recommendedCap.toFixed(2);
 
   const { weeklyNeedsUnderspend, weeklyWantsUnderspend } = useMemo(
     () => computeWeeklyUnderspend({ logs, dailyFlexNeeds, dailyWants, todayIso: todayISO() }),
@@ -802,12 +809,31 @@ function WeeklyCheckInModal({ profile, logs, budgetSplit, expenses, symbol, onCl
         </Card>
 
         <Card style={{ background: C.brassBg, borderColor: `${C.brass}55` }}>
-          <div className="flex items-center gap-1.5 mb-1.5 text-xs font-bold uppercase tracking-wide" style={{ color: C.brass }}>
-            <Sparkles size={14} /> Smart Recommendation
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide" style={{ color: C.brass }}>
+              <Sparkles size={14} /> Smart Recommendation
+            </div>
+            {remainingCash > 0 && (
+              <span
+                className="text-[9px] font-bold px-1.5 py-0.5 rounded-full whitespace-nowrap"
+                style={{
+                  background: { "at-risk": C.dangerBg, "adjusted-up": C.brassBg, "on-pace": C.mossBg }[dailyCapStatus],
+                  color: { "at-risk": C.danger, "adjusted-up": C.brass, "on-pace": C.moss }[dailyCapStatus],
+                }}
+              >
+                {{ "at-risk": "At risk", "adjusted-up": "Adjusted", "on-pace": "On pace" }[dailyCapStatus]}
+              </span>
+            )}
           </div>
           <p className="text-xs leading-relaxed mb-3" style={{ color: C.ink }}>
             {remainingCash > 0 ? (
-              <>You have <strong>{fmt(remainingCash, symbol)}</strong> remaining for the next <strong>{daysRemaining} days</strong>. We recommend capping discretionary daily spend to <strong>{symbol}{recommendedDailyCap}/day</strong> to finish on target.</>
+              dailyCapStatus === "at-risk" ? (
+                <>You've been averaging <strong>{fmt(recentAvgDaily, symbol)}/day</strong>, which would run out your <strong>{fmt(remainingCash, symbol)}</strong> balance before the <strong>{daysRemaining} days</strong> left are up. Cap spending at <strong>{symbol}{recommendedDailyCap}/day</strong> from here so you don't run out.</>
+              ) : dailyCapStatus === "adjusted-up" ? (
+                <>Your recent average of <strong>{fmt(recentAvgDaily, symbol)}/day</strong> is a bit above your planned <strong>{fmt(plannedDailyCap, symbol)}/day</strong>, but your remaining <strong>{fmt(remainingCash, symbol)}</strong> comfortably covers that pace for the next <strong>{daysRemaining} days</strong>. We're raising your daily cap to <strong>{symbol}{recommendedDailyCap}/day</strong> so you're not fighting an unrealistic target.</>
+              ) : (
+                <>You're spending within plan. We're keeping your daily cap at <strong>{symbol}{recommendedDailyCap}/day</strong> — any amount you don't use gets banked into your pools instead of being spent just to "finish" the balance.</>
+              )
             ) : (
               <>You have exhausted your allowance for this period. Recommend pausing non-essential Wants until the next allowance deposit.</>
             )}
