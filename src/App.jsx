@@ -9,6 +9,13 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell,
 } from "recharts";
+import {
+  toLocalISODate, parseLocalDate, todayISO, daysBetween, addDays, FREQ_DAYS,
+  computeNextAllowanceReminderDate, computeSnoozeDate,
+  getActiveSlideIds, allowanceSlideMode, shouldBankUnderspend,
+  isItemPurchasable, applyWantPurchase, undoWantPurchase,
+  computeWeeklyUnderspend, bankUnderspend, allocateUnderspend,
+} from "./lib/budgetMath.js";
 
 const C = {
   paper: "#EFEBE2",
@@ -54,12 +61,6 @@ const CURRENCIES = [
   { code: "AUD", symbol: "A$" }, { code: "INR", symbol: "₹" },
 ];
 const FREQUENCIES = ["Daily", "Weekly", "Monthly", "Yearly"];
-const FREQ_DAYS = {
-  Daily: 1, Monthly: 30, Yearly: 365,
-  daily: 1, monthly: 30, yearly: 365,
-  day: 1, week: 7, month: 30, year: 365,
-  Weekly: 7, weekly: 7
-};
 const EXP_FREQS = ["day", "week", "month", "year"];
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const STORAGE_KEY = "ledger_budget_app_data_v2";
@@ -107,19 +108,6 @@ const storageHelper = {
   }
 };
 
-function toLocalISODate(d) {
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-function parseLocalDate(iso) {
-  if (iso instanceof Date) return iso;
-  const [y, m, d] = String(iso).slice(0, 10).split("-").map(Number);
-  return new Date(y, (m || 1) - 1, d || 1);
-}
-const todayISO = () => toLocalISODate(new Date());
-const daysBetween = (a, b) => Math.ceil((parseLocalDate(b) - parseLocalDate(a)) / 86400000);
 const symbolFor = (code) => (CURRENCIES.find((c) => c.code === code) || {}).symbol || "$";
 const fmt = (amount, symbol) =>
   `${symbol}${Number(amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -130,12 +118,6 @@ function nextWeekday(fromIso, targetDay) {
   let diff = (targetDay - day + 7) % 7;
   if (diff === 0) diff = 7;
   d.setDate(d.getDate() + diff);
-  return toLocalISODate(d);
-}
-
-function addDays(iso, days) {
-  const d = parseLocalDate(iso);
-  d.setDate(d.getDate() + days);
   return toLocalISODate(d);
 }
 
@@ -383,6 +365,108 @@ function Legend({ color, label, spent, total, symbol, overspent }) {
   );
 }
 
+const STATIC_QUOTES = [
+  "You're doing great, {name}.",
+  "Every ringgit counts, {name} — keep it up.",
+  "Small steady steps win the month, {name}.",
+  "Stay the course, {name}. Your future self says thanks.",
+  "{name}, discipline today is freedom tomorrow.",
+  "Nice and steady, {name} — that's how budgets get built.",
+];
+
+function buildDynamicQuotes({ name, safeToSpend, symbol, savingsPool, wantsPool }) {
+  return [
+    `${name}, you've got ${fmt(safeToSpend, symbol)} left today — nice pace.`,
+    `Your Savings Pool just hit ${fmt(savingsPool, symbol)}, ${name}.`,
+    `${name}, your Wants Pool is at ${fmt(wantsPool, symbol)} — getting closer to that wishlist item.`,
+  ];
+}
+
+function DashboardCarouselBanner({ profile, checkInDue, symbol, safeToSpend, onCheckIn, onOpenAllowanceReminder }) {
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 8000);
+    return () => clearInterval(id);
+  }, []);
+
+  const todayIso = todayISO();
+  const activeSlideIds = useMemo(
+    () => getActiveSlideIds({
+      checkInDue,
+      nextAllowanceReminderDate: profile.nextAllowanceReminderDate,
+      allowanceReminderSnoozedDate: profile.allowanceReminderSnoozedDate || null,
+      todayIso,
+    }),
+    [checkInDue, profile.nextAllowanceReminderDate, profile.allowanceReminderSnoozedDate, todayIso]
+  );
+  const slideId = activeSlideIds[tick % activeSlideIds.length];
+
+  const quotePool = useMemo(() => [
+    ...STATIC_QUOTES,
+    ...buildDynamicQuotes({
+      name: profile.name, safeToSpend, symbol,
+      savingsPool: profile.savingsPool || 0, wantsPool: profile.wantsPool || 0,
+    }),
+  ], [profile.name, safeToSpend, symbol, profile.savingsPool, profile.wantsPool]);
+
+  const quoteText = useMemo(
+    () => quotePool[Math.floor(Math.random() * quotePool.length)].replace("{name}", profile.name),
+    [tick, quotePool]
+  );
+
+  let content;
+  let action = null;
+  if (slideId === "checkin") {
+    content = <>Your weekly Strategy check-in is ready, {profile.name}.</>;
+    action = { label: "Check in now", onClick: onCheckIn };
+  } else if (slideId === "allowance") {
+    const mode = allowanceSlideMode({ nextAllowanceReminderDate: profile.nextAllowanceReminderDate, todayIso });
+    const days = daysBetween(todayIso, profile.nextAllowanceReminderDate);
+    content = mode === "due"
+      ? <>Time to re-input your allowance, {profile.name}.</>
+      : <>Allowance re-input in {days} day{days === 1 ? "" : "s"}.</>;
+    action = { label: "Input now", onClick: onOpenAllowanceReminder };
+  } else {
+    content = quoteText;
+  }
+  const activeIndex = tick % activeSlideIds.length;
+
+  return (
+    <div
+      className="relative overflow-hidden rounded-2xl mt-4 mb-5 px-5 py-5"
+      style={{ background: `linear-gradient(135deg, ${C.moss} 0%, ${C.brass} 100%)` }}
+    >
+      <Sparkles size={84} color="#FFFFFF26" className="absolute -right-4 -top-4 pointer-events-none" />
+      <div className="relative flex items-center justify-between gap-3">
+        <p className="text-sm font-semibold leading-snug pr-1" style={{ color: C.white, fontFamily: "'Public Sans', sans-serif" }}>
+          {content}
+        </p>
+        {action && (
+          <button
+            onClick={action.onClick}
+            className="shrink-0 text-xs font-bold px-3 py-1.5 rounded-full whitespace-nowrap"
+            style={{ background: C.white, color: C.ink, fontFamily: "'Public Sans', sans-serif" }}
+          >
+            {action.label} →
+          </button>
+        )}
+      </div>
+      {activeSlideIds.length > 1 && (
+        <div className="relative flex items-center gap-1.5 mt-4">
+          {activeSlideIds.map((id, i) => (
+            <span
+              key={id}
+              className="h-1.5 rounded-full transition-all duration-300"
+              style={{ width: i === activeIndex ? 18 : 6, background: i === activeIndex ? C.white : "#FFFFFF66" }}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function NavBar({ view, setView }) {
   const items = [
     { id: "dashboard", label: "Dashboard", icon: Home },
@@ -440,7 +524,7 @@ function ItemModal({ onClose, onSave, forceTarget }) {
       <Field label="Category Type">
         <PillToggle options={[{ value: "need", label: "Need" }, { value: "want", label: "Want" }]} value={type} onChange={setType} />
       </Field>
-      <Field label="Item Name"><TextInput placeholder="e.g. TNG Auto Reload, New Laptop" value={name} onChange={(e) => setName(e.target.value)} /></Field>
+      <Field label="Item Name"><TextInput placeholder="e.g. Perfume, Phone, Watch" value={name} onChange={(e) => setName(e.target.value)} /></Field>
       <Field label="Cost"><TextInput type="number" placeholder="0.00" value={cost} onChange={(e) => setCost(e.target.value)} /></Field>
       <label className="flex items-center gap-2 mb-4 text-sm" style={{ color: C.inkSoft, fontFamily: "'Public Sans', sans-serif" }}>
         <input type="checkbox" checked={hasTarget} onChange={(e) => setHasTarget(e.target.checked)} />
@@ -477,7 +561,7 @@ function ExpenseModal({ onClose, onSave }) {
       <Field label="Budget Category">
         <PillToggle options={[{ value: "needs", label: "Needs" }, { value: "wants", label: "Wants" }]} value={category} onChange={setCategory} />
       </Field>
-      <Field label="Expense Name"><TextInput placeholder="e.g. TNG Card RM50, Netflix, Rent" value={name} onChange={(e) => setName(e.target.value)} /></Field>
+      <Field label="Expense Name"><TextInput placeholder="e.g. Phone Bill, Rent, Gym Membership" value={name} onChange={(e) => setName(e.target.value)} /></Field>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Amount"><TextInput type="number" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} /></Field>
         <Field label="Frequency">
@@ -516,7 +600,7 @@ function LogModal({ onClose, onSave, currencySymbol }) {
         </Field>
       )}
       <Field label={`Amount (${currencySymbol})`}><TextInput type="number" autoFocus placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} /></Field>
-      <Field label="Note (optional)"><TextInput placeholder="e.g. Lunch, Coffee, TNG reload" value={note} onChange={(e) => setNote(e.target.value)} /></Field>
+      <Field label="Note (optional)"><TextInput placeholder="e.g. Lunch, Coffee, Groceries" value={note} onChange={(e) => setNote(e.target.value)} /></Field>
       <Btn variant="accent" className="w-full mt-1" onClick={submit}><Check size={16} /> Save Log</Btn>
     </Modal>
   );
@@ -542,7 +626,69 @@ function AllowanceModal({ profile, onClose, onSave }) {
   );
 }
 
-function MacroCheckInModal({ profile, logs, budgetSplit, expenses, symbol, onClose, onApplyRecommendation }) {
+const SNOOZE_PRESETS = [1, 3, 7, 14, 30];
+
+function AllowanceReminderModal({ profile, symbol, onClose, onSetAmount, onLeaveSame, onSnooze }) {
+  const [mode, setMode] = useState("choose");
+  const [amount, setAmount] = useState(profile.allowance);
+  const [snoozeDays, setSnoozeDays] = useState(7);
+  const [useCustomDate, setUseCustomDate] = useState(false);
+  const [customDate, setCustomDate] = useState("");
+
+  if (mode === "setAmount") {
+    return (
+      <Modal title="Set new allowance" onClose={onClose}>
+        <Field label={`Allowance (${symbol})`}>
+          <TextInput type="number" autoFocus value={amount} onChange={(e) => setAmount(e.target.value)} />
+        </Field>
+        <Btn variant="accent" className="w-full mt-1" onClick={() => onSetAmount(Number(amount) || 0)}>
+          <Check size={16} /> Confirm amount
+        </Btn>
+      </Modal>
+    );
+  }
+
+  if (mode === "snooze") {
+    return (
+      <Modal title="Remind me again" onClose={onClose}>
+        <label className="flex items-center gap-2 mb-4 text-sm" style={{ color: C.inkSoft, fontFamily: "'Public Sans', sans-serif" }}>
+          <input type="checkbox" checked={useCustomDate} onChange={(e) => setUseCustomDate(e.target.checked)} />
+          Pick a specific date instead
+        </label>
+        {useCustomDate ? (
+          <Field label="Remind me on">
+            <TextInput type="date" value={customDate} onChange={(e) => setCustomDate(e.target.value)} min={todayISO()} />
+          </Field>
+        ) : (
+          <Field label="Remind me in">
+            <Select value={snoozeDays} onChange={(e) => setSnoozeDays(Number(e.target.value))}
+              options={SNOOZE_PRESETS.map((d) => ({ value: d, label: `${d} day${d === 1 ? "" : "s"}` }))} />
+          </Field>
+        )}
+        <Btn variant="accent" className="w-full mt-1" disabled={useCustomDate && !customDate}
+          onClick={() => onSnooze({ fromIso: todayISO(), days: snoozeDays, explicitDate: useCustomDate ? customDate : null })}>
+          <Check size={16} /> Confirm
+        </Btn>
+      </Modal>
+    );
+  }
+
+  return (
+    <Modal title="Time to re-input your allowance" onClose={onClose}>
+      <p className="text-sm mb-4" style={{ color: C.inkSoft, fontFamily: "'Public Sans', sans-serif" }}>
+        Has your {profile.frequency.toLowerCase()} allowance changed (OT, bonus, deductions)?
+      </p>
+      <div className="space-y-2">
+        <Btn variant="accent" className="w-full" onClick={() => setMode("setAmount")}>Set amount</Btn>
+        <Btn variant="ghost" className="w-full" onClick={onLeaveSame}>Leave the same</Btn>
+        <Btn variant="ghost" className="w-full" onClick={() => setMode("snooze")}>Remind me again</Btn>
+      </div>
+    </Modal>
+  );
+}
+
+function WeeklyCheckInModal({ profile, logs, budgetSplit, expenses, symbol, onClose, onApplyRecommendation }) {
+  const [allocation, setAllocation] = useState("split");
   const past7DaysLogs = useMemo(() => {
     const sevenDaysAgo = addDays(todayISO(), -7);
     return logs.filter((l) => l.date >= sevenDaysAgo && l.type === "expense");
@@ -574,13 +720,25 @@ function MacroCheckInModal({ profile, logs, budgetSplit, expenses, symbol, onClo
     return suggestSplit(committedNeedsMonthly, allowanceMonthly(totalAllowance, profile.frequency));
   }, [committedNeedsMonthly, totalAllowance, profile.frequency]);
 
+  const committedNeedsPeriod = (committedNeedsMonthly / 30) * daysInPeriod;
+  const grossNeedsBudget = (totalAllowance * budgetSplit.needs) / 100;
+  const wantsBudgetTotal = (totalAllowance * budgetSplit.wants) / 100;
+  const flexNeedsBudget = Math.max(0, grossNeedsBudget - committedNeedsPeriod);
+  const dailyFlexNeeds = profile.dailyNeedsCap != null ? profile.dailyNeedsCap : flexNeedsBudget / daysInPeriod;
+  const dailyWants = profile.dailyWantsCap != null ? profile.dailyWantsCap : wantsBudgetTotal / daysInPeriod;
+
+  const { weeklyNeedsUnderspend, weeklyWantsUnderspend } = useMemo(
+    () => computeWeeklyUnderspend({ logs, dailyFlexNeeds, dailyWants, todayIso: todayISO() }),
+    [logs, dailyFlexNeeds, dailyWants]
+  );
+
   return (
     <Modal title="Weekly Strategy Check-In" onClose={onClose}>
       <div className="space-y-4">
         <div className="p-3.5 rounded-xl border flex items-center gap-3" style={{ background: C.mossBg, borderColor: C.mossLight }}>
           <Zap size={22} color={C.moss} className="shrink-0" />
           <div>
-            <div className="text-xs font-bold uppercase tracking-wide" style={{ color: C.moss }}>Macro Strategy Audit</div>
+            <div className="text-xs font-bold uppercase tracking-wide" style={{ color: C.moss }}>Weekly Spending Review</div>
             <div className="text-xs" style={{ color: C.inkSoft }}>Analyzed performance from the past 7 days</div>
           </div>
         </div>
@@ -601,9 +759,29 @@ function MacroCheckInModal({ profile, logs, budgetSplit, expenses, symbol, onClo
           </div>
         </Card>
 
+        <Card>
+          <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: C.slate }}>Unused Amount This Week</div>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div><span style={{ color: C.slate }}>Needs (Flex):</span> <strong style={{ color: C.brass }}>{fmt(weeklyNeedsUnderspend, symbol)}</strong></div>
+            <div><span style={{ color: C.slate }}>Wants:</span> <strong style={{ color: C.clay }}>{fmt(weeklyWantsUnderspend, symbol)}</strong></div>
+          </div>
+          <p className="text-[11px] mt-2 mb-3" style={{ color: C.slate }}>
+            This is what you didn't spend — it doesn't roll into tomorrow's cap. Choose where it goes when you apply below.
+          </p>
+          <div className="text-[10px] font-semibold uppercase tracking-wide mb-1.5" style={{ color: C.slate }}>Save it to</div>
+          <PillToggle
+            options={[
+              { value: "split", label: "Split (suggested)" },
+              { value: "savings", label: "All to Savings" },
+            ]}
+            value={allocation}
+            onChange={setAllocation}
+          />
+        </Card>
+
         <Card style={{ background: C.brassBg, borderColor: `${C.brass}55` }}>
           <div className="flex items-center gap-1.5 mb-1.5 text-xs font-bold uppercase tracking-wide" style={{ color: C.brass }}>
-            <Sparkles size={14} /> MacroFactor Recommendation
+            <Sparkles size={14} /> Smart Recommendation
           </div>
           <p className="text-xs leading-relaxed mb-3" style={{ color: C.ink }}>
             {remainingCash > 0 ? (
@@ -625,7 +803,15 @@ function MacroCheckInModal({ profile, logs, budgetSplit, expenses, symbol, onClo
           <Btn
             variant="accent"
             className="w-full text-xs"
-            onClick={() => onApplyRecommendation({ split: smartSplitRecommendation, dailyCap: Number(recommendedDailyCap) })}
+            onClick={() => {
+              const { toSavings, toWants } = allocateUnderspend({ weeklyNeedsUnderspend, weeklyWantsUnderspend, allocation });
+              onApplyRecommendation({
+                split: smartSplitRecommendation,
+                dailyCap: Number(recommendedDailyCap),
+                weeklyNeedsUnderspend: toSavings,
+                weeklyWantsUnderspend: toWants,
+              });
+            }}
           >
             Apply Smart Rebalance & Finish Check-In
           </Btn>
@@ -724,7 +910,7 @@ function Onboarding({ onComplete }) {
   const [allowance, setAllowance] = useState("");
   const [items, setItems] = useState([]);
   const [expenses, setExpenses] = useState([
-    // { id: uid(), type: "fixed", category: "needs", name: "TNG Card / Transit", amount: 50, freq: "month" }
+    // { id: uid(), type: "fixed", category: "needs", name: "Transit Card", amount: 50, freq: "month" }
   ]);
   const [split, setSplit] = useState({ needs: 50, wants: 30, savings: 20 });
   const [splitTouched, setSplitTouched] = useState(false);
@@ -750,6 +936,8 @@ function Onboarding({ onComplete }) {
         name: name.trim() || "You", currency, frequency, allowance: Number(allowance) || 0,
         lastAllowanceUpdate: today, memberSince: today, totalReceived: Number(allowance) || 0,
         checkInDay: 1, nextCheckInDate: nextWeekday(today, 1), isGoogleConnected: false,
+        savingsPool: 0, wantsPool: 0, allowanceReminderSnoozedDate: null,
+        nextAllowanceReminderDate: computeNextAllowanceReminderDate(today, frequency),
       },
       items, expenses, budgetSplit: split, suggestedSplit: suggested,
     });
@@ -809,7 +997,7 @@ function Onboarding({ onComplete }) {
         {step === 2 && (
           <>
             <p className="text-sm mb-4" style={{ color: C.inkSoft, fontFamily: "'Public Sans', sans-serif" }}>
-              Fixed expenses (like TNG RM50) are automatically subtracted from your Needs budget so you don't overspend.
+              Fixed expenses (like a Transit Card top-up) are automatically subtracted from your Needs budget so you don't overspend.
             </p>
             <div className="space-y-2 mb-4">
               {expenses.length === 0 && <EmptyRow text="No recurring expenses added yet" />}
@@ -857,7 +1045,7 @@ function Onboarding({ onComplete }) {
         {step === 4 && (
           <>
             <Field label="Your name">
-              <TextInput placeholder="e.g. Kaiser" value={name} onChange={(e) => setName(e.target.value)} />
+              <TextInput placeholder="e.g. John Doe" value={name} onChange={(e) => setName(e.target.value)} />
             </Field>
             <Card className="mt-2">
               <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: C.slate, fontFamily: "'Public Sans', sans-serif" }}>Summary</div>
@@ -915,7 +1103,7 @@ function RowItem({ tone, title, subtitle, onDelete, right }) {
   );
 }
 
-function Dashboard({ state, symbol, dueSoon, onOpenLog, onCheckIn, setView }) {
+function Dashboard({ state, symbol, dueSoon, onOpenLog, onCheckIn, setView, onOpenAllowanceReminder }) {
   const { profile, items, expenses, logs, budgetSplit } = state;
   const periodStart = profile.lastAllowanceUpdate;
   const periodLogs = logs.filter((l) => l.date >= periodStart);
@@ -983,11 +1171,6 @@ function Dashboard({ state, symbol, dueSoon, onOpenLog, onCheckIn, setView }) {
           </div>
         </div>
 
-        {dueSoon && (
-          <Banner onAction={onCheckIn} actionLabel="Check in">
-            Weekly Macro Strategy Check-in is due!
-          </Banner>
-        )}
         {overspent && (
           <Banner>
             <span style={{ color: C.danger, fontWeight: 700 }}>
@@ -1000,7 +1183,7 @@ function Dashboard({ state, symbol, dueSoon, onOpenLog, onCheckIn, setView }) {
           <div className="px-3.5 py-2 rounded-xl text-xs flex justify-between items-center mb-3" style={{ background: C.paperDark, color: C.inkSoft }}>
             <span className="flex items-center gap-1.5">
               <Layers size={14} color={C.brass} />
-              Fixed Needs Deducted (TNG, Bills, etc.):
+              Fixed Needs Deducted (Bills, etc.):
             </span>
             <span className="font-mono font-bold">{fmt(committedNeedsPeriod, symbol)}</span>
           </div>
@@ -1032,6 +1215,11 @@ function Dashboard({ state, symbol, dueSoon, onOpenLog, onCheckIn, setView }) {
             <Stat label="Cash Balance" value={fmt(balance, symbol)} tone={balance < 0 ? C.danger : C.moss} />
           </div>
         </Card>
+
+        <DashboardCarouselBanner
+          profile={profile} checkInDue={dueSoon} symbol={symbol} safeToSpend={safeToSpend}
+          onCheckIn={onCheckIn} onOpenAllowanceReminder={onOpenAllowanceReminder}
+        />
 
         <div className="flex gap-3 mb-5">
           <Btn variant="accent" className="flex-1" onClick={onOpenLog}><Plus size={16} /> Quick Log</Btn>
@@ -1279,13 +1467,12 @@ function TargetItemCard({ item, symbol, purchasable, onDelete, onComplete, onTap
             {fmt(item.cost, symbol)}
           </div>
           {purchasable ? (
-            <button
-              onClick={(e) => { e.stopPropagation(); onComplete(); }}
-              className="mt-1 text-[11px] font-semibold px-2 py-0.5 rounded"
+            <span
+              className="mt-1 inline-block text-[11px] font-semibold px-2 py-0.5 rounded"
               style={{ background: C.mossBg, color: C.moss }}
             >
               Affordable ✓
-            </button>
+            </span>
           ) : (
             <div className="text-[10px]" style={{ color: C.slate }}>Save more</div>
           )}
@@ -1389,7 +1576,7 @@ function EditPlanModal({ profile, budgetSplit, suggestedSplit, expenses, logs, s
             <Select value={profile.checkInDay ?? 1} onChange={(e) => onChangeCheckInDay(Number(e.target.value))} options={WEEKDAYS.map((d, i) => ({ value: i, label: d }))} />
           </Field>
           <p className="text-xs" style={{ color: C.slate, fontFamily: "'Public Sans', sans-serif" }}>
-            You'll be prompted to run your weekly Macro Strategy check-in on this day.
+            You'll be prompted to run your weekly Strategy check-in on this day.
           </p>
         </>
       )}
@@ -1412,14 +1599,14 @@ function DailyVelocityRow({ label, spent, cap, symbol, color }) {
     </Card>
   );
 }
-function WishlistModal({ items, symbol, balance, onClose, onDelete, onComplete, onTap }) {
+function WishlistModal({ items, symbol, balance, wantsPool, onClose, onDelete, onComplete, onTap }) {
   const sorted = sortByRelevance(items.filter((i) => !i.purchased), balance);
   return (
     <Modal title="Full wishlist" onClose={onClose}>
       <div className="space-y-2 max-h-[60vh] overflow-y-auto">
         {sorted.length === 0 && <EmptyRow text="Nothing in your wishlist" />}
         {sorted.map((item) => (
-          <TargetItemCard key={item.id} item={item} symbol={symbol} purchasable={balance >= item.cost}
+          <TargetItemCard key={item.id} item={item} symbol={symbol} purchasable={isItemPurchasable(item, balance, wantsPool)}
             onDelete={() => onDelete(item.id)} onComplete={() => onComplete(item)} onTap={() => onTap(item)} />
         ))}
       </div>
@@ -1430,7 +1617,8 @@ function Strategy({ state, symbol, checkInDue, daysToCheckIn, onCheckIn, onSkipC
   const { profile, items, expenses, logs, budgetSplit } = state;
   const balance = computeBalance(profile, logs);
   const allowance = Number(profile.allowance) || 0;
-  
+  const wantsPool = profile.wantsPool || 0;
+
   const needsCash = (allowance * budgetSplit.needs) / 100;
   const wantsCash = (allowance * budgetSplit.wants) / 100;
   const savingsCash = (allowance * budgetSplit.savings) / 100;
@@ -1462,14 +1650,14 @@ function Strategy({ state, symbol, checkInDue, daysToCheckIn, onCheckIn, onSkipC
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Zap size={18} color={checkInDue ? C.brass : C.moss} />
-            <span className="text-sm font-semibold" style={{ color: C.ink }}>Weekly Macro Strategy</span>
+            <span className="text-sm font-semibold" style={{ color: C.ink }}>Weekly Check-In</span>
           </div>
           <span className="text-xs font-mono font-bold" style={{ color: C.slate }}>
             {checkInDue ? "DUE NOW" : `In ${daysToCheckIn} days`}
           </span>
         </div>
         <p className="text-xs mt-2 text-slate-600">
-          Check in weekly to analyze spending velocity and adapt your budget split according to dynamic MacroFactor recommendations.
+          Check in weekly to analyze spending velocity and adapt your budget split with smart recommendations.
         </p>
         <div className="flex gap-2 mt-3">
           <Btn variant="accent" className="flex-1 text-xs" onClick={onCheckIn}>Start Check-In</Btn>
@@ -1497,6 +1685,11 @@ function Strategy({ state, symbol, checkInDue, daysToCheckIn, onCheckIn, onSkipC
         )}
       </Card>
 
+      <Card className="mb-5 grid grid-cols-2 gap-2">
+        <Stat label="Savings Pool" value={fmt(profile.savingsPool || 0, symbol)} tone={C.brass} />
+        <Stat label="Wants Pool" value={fmt(profile.wantsPool || 0, symbol)} tone={C.clay} />
+      </Card>
+
       {/* Target Items List */}
       <div className="flex items-center justify-between mb-2">
         <h2 className="text-sm font-bold uppercase tracking-wide" style={{ color: C.slate, fontFamily: "'Public Sans', sans-serif" }}>Wishlist & Target Items</h2>
@@ -1514,7 +1707,7 @@ function Strategy({ state, symbol, checkInDue, daysToCheckIn, onCheckIn, onSkipC
             key={item.id}
             item={item}
             symbol={symbol}
-            purchasable={balance >= item.cost}
+            purchasable={isItemPurchasable(item, balance, wantsPool)}
             onDelete={() => onDeleteItem(item.id)}
             onComplete={() => onMarkPurchased(item)}
             onTap={() => setEditingItem(item)}
@@ -1559,7 +1752,7 @@ function Strategy({ state, symbol, checkInDue, daysToCheckIn, onCheckIn, onSkipC
         />
       )}
       {showWishlist && (
-        <WishlistModal items={items} symbol={symbol} balance={balance} onClose={() => setShowWishlist(false)}
+        <WishlistModal items={items} symbol={symbol} balance={balance} wantsPool={wantsPool} onClose={() => setShowWishlist(false)}
           onDelete={onDeleteItem} onComplete={onMarkPurchased} onTap={(item) => setEditingItem(item)} />
       )}
       {showEditPlan && (
@@ -1572,7 +1765,7 @@ function Strategy({ state, symbol, checkInDue, daysToCheckIn, onCheckIn, onSkipC
   );
 }
 
-function ProfilePage({ state, symbol, onUpdateProfile, onAddItem, onDeleteItem, onAddExpense, onDeleteExpense, onReset, onToggleNotif, onOpenAllowanceModal, onGoogleSignInSuccess, onGoogleSignOut }) {
+function ProfilePage({ state, symbol, onUpdateProfile, onAddItem, onDeleteItem, onAddExpense, onDeleteExpense, onReset, onToggleNotif, onOpenAllowanceModal, onGoogleSignInSuccess, onGoogleSignOut, onChangeFrequency }) {
   const { profile, items, expenses, logs } = state;
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
@@ -1622,7 +1815,7 @@ function ProfilePage({ state, symbol, onUpdateProfile, onAddItem, onDeleteItem, 
             <Select value={profile.currency} onChange={(e) => onUpdateProfile({ currency: e.target.value })} options={CURRENCIES.map((c) => ({ value: c.code, label: `${c.code} (${c.symbol})` }))} />
           </Field>
           <Field label="Frequency">
-            <Select value={profile.frequency} onChange={(e) => onUpdateProfile({ frequency: e.target.value })} options={FREQUENCIES.map((f) => ({ value: f, label: f }))} />
+            <Select value={profile.frequency} onChange={(e) => onChangeFrequency(e.target.value)} options={FREQUENCIES.map((f) => ({ value: f, label: f }))} />
           </Field>
         </div>
         <Field label="Membership tier">
@@ -1711,7 +1904,8 @@ export default function App() {
   const [view, setView] = useState("dashboard");
   const [showLogModal, setShowLogModal] = useState(false);
   const [showAllowanceModal, setShowAllowanceModal] = useState(false);
-  const [showMacroCheckInModal, setShowMacroCheckInModal] = useState(false);
+  const [showWeeklyCheckInModal, setShowWeeklyCheckInModal] = useState(false);
+  const [showAllowanceReminderModal, setShowAllowanceReminderModal] = useState(false);
   const [notifStatus, setNotifStatus] = useState(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
 
   useEffect(() => {
@@ -1730,13 +1924,18 @@ export default function App() {
               tier: p.tier || "free",
               isGoogleConnected: p.isGoogleConnected || false,
               remindersEnabled: p.remindersEnabled ?? true,
+              savingsPool: p.savingsPool ?? 0,
+              wantsPool: p.wantsPool ?? 0,
+              allowanceReminderSnoozedDate: p.allowanceReminderSnoozedDate ?? null,
+              nextAllowanceReminderDate: p.nextAllowanceReminderDate
+                ?? computeNextAllowanceReminderDate(p.lastAllowanceUpdate || today, p.frequency),
             };
             p = { ...p, ...patched };
           }
           setProfile(p);
           setItems(d.items || []);
           setExpenses(d.expenses || [
-            { id: uid(), type: "fixed", category: "needs", name: "TNG Card / Transit", amount: 50, freq: "month" }
+            { id: uid(), type: "fixed", category: "needs", name: "Transit Card", amount: 50, freq: "month" }
           ]);
           setLogs(d.logs || []);
           setBudgetSplit(d.budgetSplit || { needs: 50, wants: 30, savings: 20 });
@@ -1794,19 +1993,32 @@ export default function App() {
   }
   function markPurchased(item) {
     const logId = uid();
-    const nextItems = items.map((i) => (i.id === item.id ? { ...i, purchased: true, purchasedDate: todayISO(), purchaseLogId: logId } : i));
+    const wantsPoolDebit = item.type === "want" ? Math.min(item.cost, profile.wantsPool || 0) : 0;
+    const nextItems = items.map((i) => (i.id === item.id ? { ...i, purchased: true, purchasedDate: todayISO(), purchaseLogId: logId, wantsPoolDebit } : i));
     const nextLogs = [...logs, {
       id: logId, type: "expense", category: item.type === "need" ? "needs" : "wants",
       amount: item.cost, note: item.name, date: todayISO(),
     }];
     setItems(nextItems); setLogs(nextLogs);
-    persist({ items: nextItems, logs: nextLogs });
+    const patch = { items: nextItems, logs: nextLogs };
+    if (item.type === "want") {
+      const nextProfile = { ...profile, wantsPool: applyWantPurchase(profile.wantsPool, item.cost) };
+      setProfile(nextProfile);
+      patch.profile = nextProfile;
+    }
+    persist(patch);
   }
   function undoPurchase(item) {
-    const nextItems = items.map((i) => (i.id === item.id ? { ...i, purchased: false, purchasedDate: null, purchaseLogId: null } : i));
+    const nextItems = items.map((i) => (i.id === item.id ? { ...i, purchased: false, purchasedDate: null, purchaseLogId: null, wantsPoolDebit: undefined } : i));
     const nextLogs = item.purchaseLogId ? logs.filter((l) => l.id !== item.purchaseLogId) : logs;
     setItems(nextItems); setLogs(nextLogs);
-    persist({ items: nextItems, logs: nextLogs });
+    const patch = { items: nextItems, logs: nextLogs };
+    if (item.type === "want") {
+      const nextProfile = { ...profile, wantsPool: undoWantPurchase(profile.wantsPool, item.wantsPoolDebit || 0) };
+      setProfile(nextProfile);
+      patch.profile = nextProfile;
+    }
+    persist(patch);
   }
   function deletePurchase(item) {
     const nextItems = items.filter((i) => i.id !== item.id);
@@ -1818,7 +2030,7 @@ export default function App() {
   function deleteExpense(id) { const next = expenses.filter((e) => e.id !== id); setExpenses(next); persist({ expenses: next }); }
   function updateProfile(patch) { const next = { ...profile, ...patch }; setProfile(next); persist({ profile: next }); }
   function saveSplit(split) { setBudgetSplit(split); persist({ budgetSplit: split }); }
-  function applyRecommendedSplit({ split, dailyCap }) {
+  function applyRecommendedSplit({ split, dailyCap, weeklyNeedsUnderspend, weeklyWantsUnderspend }) {
     const needsWantsTotal = split.needs + split.wants;
     const needsPct = needsWantsTotal > 0 ? split.needs / needsWantsTotal : 0.5;
     const wantsPct = needsWantsTotal > 0 ? split.wants / needsWantsTotal : 0.5;
@@ -1826,17 +2038,29 @@ export default function App() {
     const dailyWantsCap = dailyCap * wantsPct;
     setBudgetSplit(split);
     setProfile((prev) => {
+      const today = todayISO();
+      const canBank = shouldBankUnderspend(prev.lastUnderspendBankDate, today);
+      const pools = canBank
+        ? bankUnderspend(
+            { savingsPool: prev.savingsPool, wantsPool: prev.wantsPool },
+            weeklyNeedsUnderspend,
+            weeklyWantsUnderspend
+          )
+        : { savingsPool: prev.savingsPool || 0, wantsPool: prev.wantsPool || 0 };
       const next = {
         ...prev,
         nextCheckInDate: addDays(prev.nextCheckInDate || todayISO(), 7),
         dailyCapOverride: dailyCap,
         dailyNeedsCap,
         dailyWantsCap,
+        savingsPool: pools.savingsPool,
+        wantsPool: pools.wantsPool,
+        lastUnderspendBankDate: canBank ? today : prev.lastUnderspendBankDate,
       };
       persist({ budgetSplit: split, profile: next });
       return next;
     });
-    setShowMacroCheckInModal(false);
+    setShowWeeklyCheckInModal(false);
   }
 
   function changeCheckInDay(day) {
@@ -1855,6 +2079,35 @@ export default function App() {
       dailyCapOverride: null,
       dailyNeedsCap: null,
       dailyWantsCap: null,
+      nextAllowanceReminderDate: computeNextAllowanceReminderDate(todayISO(), profile.frequency),
+      allowanceReminderSnoozedDate: null,
+    };
+    setProfile(next); persist({ profile: next });
+  }
+
+  function snoozeAllowanceReminder(newDate) {
+    const next = { ...profile, nextAllowanceReminderDate: newDate, allowanceReminderSnoozedDate: todayISO() };
+    setProfile(next); persist({ profile: next });
+  }
+
+  function handleReminderSetAmount(amount) {
+    submitAllowance({ amount, currency: profile.currency });
+    setShowAllowanceReminderModal(false);
+  }
+  function handleReminderLeaveSame() {
+    submitAllowance({ amount: Number(profile.allowance) || 0, currency: profile.currency });
+    setShowAllowanceReminderModal(false);
+  }
+  function handleReminderSnooze({ fromIso, days, explicitDate }) {
+    snoozeAllowanceReminder(computeSnoozeDate({ fromIso, days, explicitDate }));
+    setShowAllowanceReminderModal(false);
+  }
+
+  function changeFrequency(freq) {
+    const next = {
+      ...profile,
+      frequency: freq,
+      nextAllowanceReminderDate: computeNextAllowanceReminderDate(profile.lastAllowanceUpdate || todayISO(), freq),
     };
     setProfile(next); persist({ profile: next });
   }
@@ -1907,7 +2160,8 @@ export default function App() {
         <Dashboard
           state={state} symbol={symbol} dueSoon={checkInDue}
           onOpenLog={() => setShowLogModal(true)}
-          onCheckIn={() => setShowMacroCheckInModal(true)}
+          onCheckIn={() => setShowWeeklyCheckInModal(true)}
+          onOpenAllowanceReminder={() => setShowAllowanceReminderModal(true)}
           setView={setView}
         />
       )}
@@ -1917,7 +2171,7 @@ export default function App() {
       {view === "strategy" && (
         <Strategy
           state={state} symbol={symbol} checkInDue={checkInDue} daysToCheckIn={daysToCheckIn}
-          onCheckIn={() => setShowMacroCheckInModal(true)}
+          onCheckIn={() => setShowWeeklyCheckInModal(true)}
           onSkipCheckIn={skipCheckIn}
           onChangeCheckInDay={changeCheckInDay}
           onAddItem={addItem}
@@ -1936,6 +2190,7 @@ export default function App() {
           onAddExpense={addExpense} onDeleteExpense={deleteExpense} onReset={resetAll} onToggleNotif={toggleNotif}
           onOpenAllowanceModal={() => setShowAllowanceModal(true)}
           onGoogleSignInSuccess={handleGoogleSignInSuccess} onGoogleSignOut={handleGoogleSignOut}
+          onChangeFrequency={changeFrequency}
         />
       )}
 
@@ -1943,10 +2198,19 @@ export default function App() {
 
       {showLogModal && <LogModal currencySymbol={symbol} onClose={() => setShowLogModal(false)} onSave={addLog} />}
       {showAllowanceModal && <AllowanceModal profile={profile} onClose={() => setShowAllowanceModal(false)} onSave={submitAllowance} />}
-      {showMacroCheckInModal && (
-        <MacroCheckInModal
+      {showAllowanceReminderModal && (
+        <AllowanceReminderModal
+          profile={profile} symbol={symbol}
+          onClose={() => setShowAllowanceReminderModal(false)}
+          onSetAmount={handleReminderSetAmount}
+          onLeaveSame={handleReminderLeaveSame}
+          onSnooze={handleReminderSnooze}
+        />
+      )}
+      {showWeeklyCheckInModal && (
+        <WeeklyCheckInModal
           profile={profile} logs={logs} budgetSplit={budgetSplit} expenses={expenses} symbol={symbol}
-          onClose={() => setShowMacroCheckInModal(false)}
+          onClose={() => setShowWeeklyCheckInModal(false)}
           onApplyRecommendation={applyRecommendedSplit}
         />
       )}
