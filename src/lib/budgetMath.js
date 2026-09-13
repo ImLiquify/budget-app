@@ -99,3 +99,15 @@ export function allocateUnderspend({ weeklyNeedsUnderspend, weeklyWantsUnderspen
   }
   return { toSavings: weeklyNeedsUnderspend, toWants: weeklyWantsUnderspend };
 }
+
+export function computeSmartDailyCap({ remainingCash, daysRemaining, recentAvgDaily, plannedDailyCap }) {
+  const sustainableCap = daysRemaining > 0 ? remainingCash / daysRemaining : 0;
+
+  if (recentAvgDaily <= plannedDailyCap) {
+    const recommendedCap = Math.min(plannedDailyCap, sustainableCap);
+    return { recommendedCap, status: recommendedCap < plannedDailyCap ? "at-risk" : "on-pace" };
+  }
+
+  const recommendedCap = Math.min(recentAvgDaily, sustainableCap);
+  return { recommendedCap, status: recentAvgDaily <= sustainableCap ? "adjusted-up" : "at-risk" };
+}
