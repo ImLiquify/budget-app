@@ -3,7 +3,7 @@ import {
   Plus, Home, BookOpen, Target, User, X, Check, TrendingUp, TrendingDown,
   Wallet, Bell, BellOff, Calendar, ChevronRight, Trash2, ArrowUpRight,
   ArrowDownRight, Loader2, Sparkles, Flag, Settings2, AlertTriangle,
-  LogIn, LogOut, ShieldCheck, Zap, RefreshCw, Layers
+  LogIn, LogOut, ShieldCheck, Zap, RefreshCw, Layers, FileUp
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -16,6 +16,7 @@ import {
   isItemPurchasable, applyWantPurchase, undoWantPurchase,
   computeWeeklyUnderspend, bankUnderspend, allocateUnderspend, computeSmartDailyCap,
 } from "./lib/budgetMath.js";
+import { readStatementPdf, prepareImport } from "./lib/statementImport.js";
 
 const C = {
   paper: "#EFEBE2",
@@ -576,7 +577,7 @@ function ExpenseModal({ onClose, onSave }) {
   );
 }
 
-function LogModal({ onClose, onSave, currencySymbol }) {
+function LogModal({ onClose, onSave, currencySymbol, onOpenImport }) {
   const [type, setType] = useState("expense");
   const [category, setCategory] = useState("needs");
   const [amount, setAmount] = useState("");
@@ -602,6 +603,10 @@ function LogModal({ onClose, onSave, currencySymbol }) {
       <Field label={`Amount (${currencySymbol})`}><TextInput type="number" autoFocus placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} /></Field>
       <Field label="Note (optional)"><TextInput placeholder="e.g. Lunch, Coffee, Groceries" value={note} onChange={(e) => setNote(e.target.value)} /></Field>
       <Btn variant="accent" className="w-full mt-1" onClick={submit}><Check size={16} /> Save Log</Btn>
+      <button type="button" className="w-full mt-3 text-sm font-semibold" style={{ color: C.moss, fontFamily: "'Public Sans', sans-serif" }}
+        onClick={() => { onClose(); onOpenImport(); }}>
+        Forgot to log? Import a statement PDF →
+      </button>
     </Modal>
   );
 }
@@ -1378,7 +1383,110 @@ function EditLogModal({ log, onClose, onSave, onDelete }) {
   );
 }
 
-function Diary({ logs, symbol, onUpdateLog, onDeleteLog }) {
+function ImportStatementModal({ logs, profile, symbol, onClose, onImport }) {
+  const [file, setFile] = useState(null);
+  const [password, setPassword] = useState("");
+  const [needsPassword, setNeedsPassword] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [rows, setRows] = useState(null);
+  const [duplicates, setDuplicates] = useState(0);
+  const text = { color: C.inkSoft, fontFamily: "'Public Sans', sans-serif" };
+
+  async function read(f, pw) {
+    setBusy(true); setError("");
+    try {
+      const res = prepareImport(await readStatementPdf(await f.arrayBuffer(), pw), logs, profile);
+      if (!res.rows.length && !res.duplicates) setError("No transactions found. Use the PDF statement from your bank or e-wallet app, not a scan or photo.");
+      else { setRows(res.rows.sort((a, b) => (a.date < b.date ? 1 : -1))); setDuplicates(res.duplicates); }
+    } catch (e) {
+      if (e?.name === "PasswordException") { setNeedsPassword(true); if (pw) setError("Wrong password, try again."); }
+      else setError("Couldn't read this file. Make sure it's a PDF statement.");
+    }
+    setBusy(false);
+  }
+  const update = (id, patch) => setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  const remove = (id) => setRows((rs) => rs.filter((r) => r.id !== id));
+
+  if (!rows) {
+    return (
+      <Modal title="Import statement" onClose={onClose}>
+        <p className="text-sm mb-4" style={text}>
+          Upload a PDF statement from your bank or e-wallet (Public Bank, TNG, …). It's read on this device, and you'll review everything before it's logged.
+        </p>
+        <label className="w-full px-4 py-3 rounded-lg font-semibold text-sm flex items-center justify-center gap-1.5 cursor-pointer mb-4"
+          style={{ background: C.ink, color: C.paper, fontFamily: "'Public Sans', sans-serif" }}>
+          <FileUp size={16} /> {file ? file.name : "Choose PDF"}
+          <input type="file" accept="application/pdf,.pdf" className="hidden" onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = "";
+            if (!f) return;
+            setFile(f); setPassword(""); setNeedsPassword(false); read(f, "");
+          }} />
+        </label>
+        {needsPassword && (
+          <>
+            <Field label="This PDF is password-protected">
+              <TextInput type="password" autoFocus value={password} onChange={(e) => setPassword(e.target.value)} />
+            </Field>
+            <Btn variant="accent" className="w-full mb-3" disabled={!password || busy} onClick={() => read(file, password)}>Unlock</Btn>
+          </>
+        )}
+        {busy && <div className="flex items-center gap-2 text-sm" style={text}><Loader2 className="animate-spin" size={16} /> Reading statement…</div>}
+        {error && <p className="text-sm font-medium" style={{ color: C.danger, fontFamily: "'Public Sans', sans-serif" }}>{error}</p>}
+      </Modal>
+    );
+  }
+
+  return (
+    <Modal title="Review before logging" onClose={onClose}>
+      <p className="text-sm mb-3" style={text}>
+        {rows.length} to log{duplicates ? ` · ${duplicates} already in your diary (skipped)` : ""}. Remove anything you don't want.
+        {rows.some((r) => r.category === "salary") && " Salary also updates your allowance."}
+      </p>
+      {rows.length === 0 && <EmptyRow text="Nothing new to log" />}
+      <div className="space-y-2 mb-4">
+        {rows.map((r) => {
+          const isIncome = r.type === "income";
+          return (
+            <div key={r.id} className="p-3 rounded-xl" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+              <div className="flex items-start gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold truncate" style={{ color: C.ink, fontFamily: "'Public Sans', sans-serif" }}>{r.note || (isIncome ? "Income" : "Expense")}</div>
+                  <div className="text-xs" style={{ color: C.slate, fontFamily: "'Public Sans', sans-serif" }}>{r.date}</div>
+                </div>
+                <div className="text-sm font-bold tabular-nums shrink-0" style={{ color: isIncome ? C.moss : C.ink, fontFamily: "'IBM Plex Mono', monospace" }}>
+                  {isIncome ? "+" : "−"}{fmt(r.amount, symbol)}
+                </div>
+                <button type="button" aria-label="Remove entry" className="p-1 -mr-1 shrink-0" onClick={() => remove(r.id)}>
+                  <Trash2 size={16} color={C.danger} />
+                </button>
+              </div>
+              <div className="mt-2">
+                <PillToggle value={r.category} onChange={(category) => update(r.id, { category })}
+                  options={isIncome
+                    ? [{ value: "income", label: "Income" }, { value: "salary", label: "Salary" }]
+                    : [{ value: "needs", label: "Needs" }, { value: "wants", label: "Wants" }]} />
+              </div>
+              {r.category === "salary" && profile.lastAllowanceUpdate && r.date <= profile.lastAllowanceUpdate && (
+                <div className="text-xs mt-2" style={{ color: C.brass, fontFamily: "'Public Sans', sans-serif" }}>
+                  You entered your allowance on {profile.lastAllowanceUpdate}. Remove this if it's the same payment.
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div className="sticky bottom-0 pt-2 pb-1" style={{ background: C.paper }}>
+        <Btn variant="accent" className="w-full" disabled={!rows.length} onClick={() => { onImport(rows); onClose(); }}>
+          <Check size={16} /> Complete · log {rows.length}
+        </Btn>
+      </div>
+    </Modal>
+  );
+}
+
+function Diary({ logs, symbol, onUpdateLog, onDeleteLog, onOpenImport }) {
   const [typeFilter, setTypeFilter] = useState("all");
   const [periodFilter, setPeriodFilter] = useState("all");
   const [fromDate, setFromDate] = useState("");
@@ -1420,7 +1528,10 @@ function Diary({ logs, symbol, onUpdateLog, onDeleteLog }) {
   return (
     <div className="max-w-md lg:max-w-2xl mx-auto px-5 pt-8 pb-28">
       <div className="text-xs font-bold tracking-widest uppercase mb-1" style={{ color: C.brass, fontFamily: "'Public Sans', sans-serif" }}>Diary</div>
-      <h1 className="text-2xl mb-5" style={{ fontFamily: "'Fraunces', serif", color: C.ink, fontWeight: 600 }}>Your log history</h1>
+      <div className="flex items-center justify-between gap-3 mb-5">
+        <h1 className="text-2xl" style={{ fontFamily: "'Fraunces', serif", color: C.ink, fontWeight: 600 }}>Your log history</h1>
+        <Btn variant="ghost" onClick={onOpenImport}><FileUp size={15} /> Import</Btn>
+      </div>
 
       <div className="flex gap-2 mb-3 flex-wrap">
         <Select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} style={{ width: "auto" }}
@@ -1953,6 +2064,7 @@ export default function App() {
   const [showAllowanceModal, setShowAllowanceModal] = useState(false);
   const [showWeeklyCheckInModal, setShowWeeklyCheckInModal] = useState(false);
   const [showAllowanceReminderModal, setShowAllowanceReminderModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [notifStatus, setNotifStatus] = useState(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
 
   useEffect(() => {
@@ -2031,6 +2143,22 @@ export default function App() {
 
   function addLog(log) { const next = [...logs, log]; setLogs(next); persist({ logs: next }); }
   function updateLog(updated) { const next = logs.map((l) => (l.id === updated.id ? updated : l)); setLogs(next); persist({ logs: next }); }
+  // Salary is logged as income (so the balance counts it once) and refreshes the allowance like the reminder does.
+  function importLogs(newLogs) {
+    const next = [...logs, ...newLogs];
+    const patch = { logs: next };
+    const salary = newLogs.filter((l) => l.category === "salary").sort((a, b) => (a.date < b.date ? -1 : 1)).pop();
+    if (salary && salary.date >= (profile.lastAllowanceUpdate || "")) {
+      patch.profile = {
+        ...profile, allowance: salary.amount, lastAllowanceUpdate: salary.date,
+        dailyCapOverride: null, dailyNeedsCap: null, dailyWantsCap: null,
+        nextAllowanceReminderDate: computeNextAllowanceReminderDate(salary.date, profile.frequency),
+        allowanceReminderSnoozedDate: null,
+      };
+      setProfile(patch.profile);
+    }
+    setLogs(next); persist(patch);
+  }
   function deleteLog(id) { const next = logs.filter((l) => l.id !== id); setLogs(next); persist({ logs: next }); }
   function addItem(item) { const next = [...items, item]; setItems(next); persist({ items: next }); }
   function deleteItem(id) { const next = items.filter((i) => i.id !== id); setItems(next); persist({ items: next }); }
@@ -2213,7 +2341,7 @@ export default function App() {
         />
       )}
 
-      {view === "diary" && <Diary logs={logs} symbol={symbol} onUpdateLog={updateLog} onDeleteLog={deleteLog} />}
+      {view === "diary" && <Diary logs={logs} symbol={symbol} onUpdateLog={updateLog} onDeleteLog={deleteLog} onOpenImport={() => setShowImportModal(true)} />}
 
       {view === "strategy" && (
         <Strategy
@@ -2243,7 +2371,10 @@ export default function App() {
 
       <NavBar view={view} setView={setView} />
 
-      {showLogModal && <LogModal currencySymbol={symbol} onClose={() => setShowLogModal(false)} onSave={addLog} />}
+      {showLogModal && <LogModal currencySymbol={symbol} onClose={() => setShowLogModal(false)} onSave={addLog} onOpenImport={() => setShowImportModal(true)} />}
+      {showImportModal && (
+        <ImportStatementModal logs={logs} profile={profile} symbol={symbol} onClose={() => setShowImportModal(false)} onImport={importLogs} />
+      )}
       {showAllowanceModal && <AllowanceModal profile={profile} onClose={() => setShowAllowanceModal(false)} onSave={submitAllowance} />}
       {showAllowanceReminderModal && (
         <AllowanceReminderModal
