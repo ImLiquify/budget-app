@@ -63,6 +63,17 @@ describe("prepareImport", () => {
     expect(duplicates).toBe(1);
     expect(rows.filter((r) => r.amount === 2.6)).toHaveLength(1);
   });
+  it("adds nothing when the same statement is imported twice", async () => {
+    const parsedPdf = await parseFixture("tng.pdf");
+    const first = prepareImport(parsedPdf, [], {});
+    expect(first.rows).toHaveLength(parsedPdf.length);
+    const again = prepareImport(parsedPdf, first.rows, {});
+    expect(again).toMatchObject({ rows: [], duplicates: parsedPdf.length });
+  });
+  it("matches manual logs whose amount was saved as text", () => {
+    const { rows } = prepareImport(parsed, [{ date: "2026-10-15", type: "expense", amount: "56.76" }], {});
+    expect(rows.find((r) => r.amount === 56.76)).toBeUndefined();
+  });
   it("flags salary and guesses wants", () => {
     const { rows } = prepareImport(parsed, [], { allowance: 540 });
     expect(rows.find((r) => r.amount === 540).category).toBe("salary");
@@ -76,5 +87,28 @@ describe("cleanNote", () => {
   it("strips bank boilerplate and reference numbers", () => {
     expect(cleanNote("PB DEBIT CARD DR MASC5370850001443612 KK MART TGB3 MYS 161026 KUALA LUMPUR 0000004.60")).toBe("KK MART TGB3 KUALA LUMPUR");
     expect(cleanNote("DUITNOW QR DR NO: 000839454 RUANG BY COOKIEZ BAR 839454 QR REF NO: 34408016")).toBe("RUANG BY COOKIEZ BAR");
+  });
+  it("strips TNG type codes and wallet references", () => {
+    expect(cleanNote("Success CARDISSUANCE_ PAYMENT 20260727101 10000010000 TNGOW3MY1 71780323756 048 Payment - APU-BILABILA RETAIL KUALA LUMPUR 202607271112128001001717829432 18501"))
+      .toBe("APU-BILABILA RETAIL KUALA LUMPUR");
+    expect(cleanNote("Success DUITNOW_RECEI VEFROM 20260803111 21700010100 17178037034 0322 SHAMEEM FATHIMA 2026080310110000010000TNGOW3 MY171780326611480"))
+      .toBe("SHAMEEM FATHIMA");
+  });
+});
+
+describe("extractPdfPages", () => {
+  it("lays out rotated pages as they appear on screen", async () => {
+    // TNG: a 595x842 page with /Rotate 90, text drawn sideways. Two cells on one visual row.
+    const page = {
+      getViewport: () => ({ width: 842, height: 595, transform: [0, 1, 1, 0, 0, 0] }),
+      getTextContent: async () => ({ items: [
+        { str: "25/7/2026", transform: [0, 11, -11, 0, 254.3, 20], width: 44.5, height: 11 },
+        { str: "RM5.58", transform: [0, 11, -11, 0, 254.3, 682], width: 35, height: 11 },
+      ] }),
+    };
+    const [[date, amount]] = await extractPdfPages({ numPages: 1, getPage: async () => page });
+    expect(date).toMatchObject({ x: 20, y: 595 - 254.3, h: 11 });
+    expect(amount.y).toBe(date.y);
+    expect(amount.x).toBeGreaterThan(date.x);
   });
 });

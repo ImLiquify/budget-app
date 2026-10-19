@@ -182,7 +182,9 @@ export function cleanNote(description) {
     .replace(/\b\d+\.\d{2}\b/g, " ")
     .replace(/\bPB DEBIT CARD DR\b|\bDUITNOW\b|\b(TRSF|QR|CR|DR|MYS)\b|\b(QR )?REF NO:?|\bNO:|\bSuccess(ful)?\b/gi, " ")
     .replace(/\b[A-Z]*\d[\dA-Z]{5,}\b/gi, " ") // card numbers, references, terminal ids
-    .replace(/\s+/g, " ").trim().slice(0, 80);
+    .replace(/\b(?=[A-Z\d]{7,}\b)[A-Z]+\d[A-Z\d]*\b|\b\d{3,}\b/g, " ") // TNG ids like TNGOW3MY1, leftover ref chunks
+    .replace(/\b[A-Z]+_[A-Z_]*(\s+(PAYMENT|VEFROM|FERTO)\b)?/g, " ") // TNG type codes, incl. their wrapped tail
+    .replace(/\s+/g, " ").trim().replace(/^Payment - /, "").slice(0, 80);
 }
 
 // Parsed rows -> diary-ready logs, minus anything already logged. Duplicates are counted per
@@ -214,10 +216,18 @@ export function prepareImport(parsed, logs, profile = {}) {
 export async function extractPdfPages(pdf) {
   const pages = [];
   for (let n = 1; n <= pdf.numPages; n++) {
-    const { items } = await (await pdf.getPage(n)).getTextContent();
-    pages.push(items.filter((i) => i.str && i.str.trim()).map((i) => ({
-      str: i.str, x: i.transform[4], y: i.transform[5], w: i.width, h: Math.abs(i.transform[3]) || i.height,
-    })));
+    const page = await pdf.getPage(n);
+    // Map through the viewport so rotated pages (TNG uses /Rotate 90) come out as seen on screen.
+    const vp = page.getViewport({ scale: 1 });
+    const [a, b, c, d, e, f] = vp.transform;
+    const { items } = await page.getTextContent();
+    pages.push(items.filter((i) => i.str && i.str.trim()).map((i) => {
+      const [, , tc, td, tx, ty] = i.transform;
+      return {
+        str: i.str, x: a * tx + c * ty + e, y: vp.height - (b * tx + d * ty + f),
+        w: i.width, h: Math.hypot(tc, td) || i.height,
+      };
+    }));
   }
   return pages;
 }
